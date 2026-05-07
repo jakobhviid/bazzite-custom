@@ -1,0 +1,10 @@
+[Unit]
+Description=Remove stale Vivaldi profile singleton lock at login
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rm -f %h/.config/vivaldi/SingletonLock %h/.config/vivaldi/SingletonCookie %h/.config/vivaldi/SingletonSocket
+
+[Install]
+WantedBy=default.target

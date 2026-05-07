@@ -13,7 +13,6 @@ on:
       - main
     paths-ignore:
       - '**/README.md'
-      - 'HANDOFF.md'
   workflow_dispatch:
 
 env:

@@ -119,7 +119,17 @@ dnf5 install -y \
     zsh-autosuggestions zsh-syntax-highlighting \
     bat btop butane eza fzf htop jq just tmux zoxide \
     starship lazygit \
-    nerd-fonts
+    nerd-fonts \
+    libheif-tools \
+    unrar 7zip \
+    gnome-tweaks
+
+# ─── Enable image-shipped system services ────────────────────────────────────
+# The system-preset file at /usr/lib/systemd/system-preset/90-bazzite-custom.preset
+# would also handle this on an installed system, but presets aren't auto-applied
+# in the build container — explicit enable creates the symlink at build time so
+# the service runs on first boot.
+systemctl enable bazzite-custom-flatpaks.service
 
 # ─── Cleanup ─────────────────────────────────────────────────────────────────
 dnf5 clean all
