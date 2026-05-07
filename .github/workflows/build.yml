@@ -23,16 +23,17 @@ env:
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
   DEFAULT_TAG: "latest"
 
-concurrency:
-  # Per-variant concurrency — let both matrix legs run, but cancel stale
-  # in-progress runs of the same variant on a new push.
-  group: ${{ github.workflow }}-${{ matrix.image_name }}-${{ github.ref || github.run_id }}
-  cancel-in-progress: true
-
 jobs:
   build_push:
     name: Build ${{ matrix.image_name }}
     runs-on: ubuntu-24.04
+
+    # Per-variant concurrency — let both matrix legs run, but cancel stale
+    # in-progress runs of the same variant on a new push. Lives at job level
+    # because workflow-level concurrency can't see the matrix context.
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.image_name }}-${{ github.ref || github.run_id }}
+      cancel-in-progress: true
 
     strategy:
       fail-fast: false
