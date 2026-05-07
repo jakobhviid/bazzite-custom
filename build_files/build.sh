@@ -12,13 +12,32 @@
 set -ouex pipefail
 
 # ─── Third-party repos ────────────────────────────────────────────────────────
+#
+# Canonical Fedora pattern: GPG keys go on disk at /etc/pki/rpm-gpg/RPM-GPG-KEY-<name>
+# (mode 0644) and the .repo file references them via gpgkey=file:///… . With
+# repo_gpgcheck=1, the key must be present BEFORE the next metadata refresh,
+# otherwise dnf5 emits "repomd.xml GPG signature verification error: Signing
+# key not found" and silently falls back. Fetching the key to a remote URL
+# in gpgkey= works for gpgcheck=1 (DNF auto-imports on first install) but is
+# racy under repo_gpgcheck=1.
 
-# Brave — official RPM repo
-curl -fsSLo /etc/yum.repos.d/brave-browser.repo \
-  https://brave-browser-rpm-release.s3.brave.com/brave-browser.repo
+# Brave — official RPM repo + official key
+curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-brave-browser \
+  https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
+chmod 0644 /etc/pki/rpm-gpg/RPM-GPG-KEY-brave-browser
+cat > /etc/yum.repos.d/brave-browser.repo <<'EOF'
+[brave-browser]
+name=Brave Browser
+baseurl=https://brave-browser-rpm-release.s3.brave.com/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-brave-browser
+EOF
 
-# 1Password — official RPM repo
-rpm --import https://downloads.1password.com/linux/keys/1password.asc
+# 1Password — official RPM repo + official key
+curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-1password \
+  https://downloads.1password.com/linux/keys/1password.asc
+chmod 0644 /etc/pki/rpm-gpg/RPM-GPG-KEY-1password
 cat > /etc/yum.repos.d/1password.repo <<'EOF'
 [1password]
 name=1Password Stable Channel
@@ -26,7 +45,7 @@ baseurl=https://downloads.1password.com/linux/rpm/stable/$basearch
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=https://downloads.1password.com/linux/keys/1password.asc
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-1password
 EOF
 
 # Proton VPN deliberately NOT in the image — its proton-vpn-daemon RPM ships a
@@ -35,22 +54,24 @@ EOF
 # ReinstallScripts/Linux/install-bazzite.sh on the live system, where systemd
 # is running and the scriptlet succeeds.
 
-# Claude Desktop (community-maintained RPM)
+# Claude Desktop (community-maintained RPM — no GPG signing upstream)
 curl -fsSLo /etc/yum.repos.d/claude-desktop.repo \
   https://aaddrick.github.io/claude-desktop-debian/rpm/claude-desktop.repo
 
-# Vivaldi — official RPM repo
-rpm --import https://repo.vivaldi.com/stable/linux_signing_key.pub
+# Vivaldi — official RPM repo + official key
+curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-vivaldi \
+  https://repo.vivaldi.com/stable/linux_signing_key.pub
+chmod 0644 /etc/pki/rpm-gpg/RPM-GPG-KEY-vivaldi
 cat > /etc/yum.repos.d/vivaldi.repo <<'EOF'
 [vivaldi]
 name=Vivaldi Stable
 baseurl=https://repo.vivaldi.com/stable/rpm/$basearch
 enabled=1
 gpgcheck=1
-gpgkey=https://repo.vivaldi.com/stable/linux_signing_key.pub
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-vivaldi
 EOF
 
-# Zen Browser — Fedora COPR
+# Zen Browser — Fedora COPR (the dnf5 copr plugin handles its own key + repo file)
 dnf5 -y copr enable sneexy/zen-browser
 
 # Firefox needs a matching openh264 — Bazzite ships -1 but mozilla-openh264 wants -2.
@@ -73,3 +94,6 @@ dnf5 install -y \
 
 # ─── Cleanup ─────────────────────────────────────────────────────────────────
 dnf5 clean all
+# /run is a runtime-only tmpfs on the live system; bootc lint flags any content
+# left there at build time. dnf leaves a state dir behind even after clean all.
+rm -rf /run/dnf
