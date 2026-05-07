@@ -7,35 +7,68 @@ Two image variants built in parallel from one Containerfile via a GHA matrix:
 | Image | Base | Target machines |
 |---|---|---|
 | `ghcr.io/jakobhviid/bazzite-custom:latest` | `ghcr.io/ublue-os/bazzite-gnome:stable` | X1 Carbon Gen 13 (Intel only) |
-| `ghcr.io/jakobhviid/bazzite-nvidia-custom:latest` | `ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable` | Atlas (RTX 5090), Annika's desktop |
+| `ghcr.io/jakobhviid/bazzite-nvidia-custom:latest` | `ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable` | NVIDIA RTX 20-series and newer (Turing+, including RTX 30/40/50) |
 
 Both signed with cosign. The build runs on every push to `main` and polls upstream Bazzite every 3 hours — it only rebuilds when the upstream `:stable` digest has actually changed (see [Build pipeline](#build-pipeline) below for the digest-gated polling mechanism).
 
 ## Rebase a machine
 
-Pick the line for your hardware. First-time rebase uses `ostree-unverified-image:` because the cosign trust rule isn't on the machine yet — it ships *inside* the new image at `/etc/pki/containers/bazzite-custom.pub`. After the first reboot you can switch to `ostree-image-signed:` and updates verify automatically.
+Two paths: an automated one-liner via the [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts) repo (handles cosign trust setup, signed rebase, optional package layering, and reboot in one shot), or a manual two-step using just `rpm-ostree`.
 
-**Intel-only laptop (X1 Carbon):**
+**Why the manual path is two steps:** `rpm-ostree`'s signed verifier needs three things on disk before it can verify a rebase target — the cosign public key at `/etc/pki/containers/bazzite-custom.pub`, a trust rule in `/etc/containers/policy.json`, and a `/etc/containers/registries.d/` entry. None of these exist on stock Bazzite for our image. The pub key ships *inside* our image, so it's only present after the first rebase has already happened. The two-step pattern (`ostree-unverified-image:` first to bootstrap the key onto disk, then `ostree-image-signed:` for ongoing verification) sidesteps the chicken-and-egg. The automated script does the same dance + writes the policy.json + registries.d entries for you, so you can go straight to `ostree-image-signed:`.
+
+### Intel-only laptop (X1 Carbon Gen 13, Intel-only hardware)
+
+**Automated (recommended):**
+
+```bash
+git clone https://github.com/jakobhviid/ReinstallScripts.git
+cd ReinstallScripts
+./Linux/install-bazzite.sh <machine_name>
+# Detects stock Bazzite, sets up trust, rebases signed, reboots.
+# After reboot, run the same command again — it'll detect the image and
+# do userspace setup (brew bundle, GNOME extensions, dotfiles, etc.).
+```
+
+**Manual:**
+
 ```bash
 sudo rpm-ostree rebase ostree-unverified-image:registry:ghcr.io/jakobhviid/bazzite-custom:latest
 sudo systemctl reboot
+
+# After the first boot of the new image — optionally promote to signed
+# (the cosign pub key is now on disk; you'll still need to add a
+# /etc/containers/policy.json trust rule, see ublue docs for the exact JSON)
+sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-custom:latest
 ```
 
-**NVIDIA desktop (Atlas, Annika):**
+### NVIDIA desktop (RTX 20-series and newer)
+
+Requires NVIDIA Turing or later (RTX 20/30/40/50) for the open kernel module. RTX 16-series and older need the proprietary closed driver — use `bazzite-gnome-nvidia` upstream as your base, not this image.
+
+**Automated (recommended):**
+
+```bash
+git clone https://github.com/jakobhviid/ReinstallScripts.git
+cd ReinstallScripts
+./Linux/install-bazzite.sh <machine_name>
+# Same flow as the laptop — auto-detects this is NVIDIA hardware (or
+# is told via the machine name) and rebases to bazzite-nvidia-custom.
+```
+
+**Manual:**
+
 ```bash
 sudo rpm-ostree rebase ostree-unverified-image:registry:ghcr.io/jakobhviid/bazzite-nvidia-custom:latest
 sudo systemctl reboot
-```
 
-After reboot — promote to signed (one-time, optional but recommended):
-```bash
-# X1 Carbon
-sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-custom:latest
-# NVIDIA desktops
+# After the first boot of the new image — optionally promote to signed
 sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-nvidia-custom:latest
 ```
 
-Subsequent updates: `sudo bootc upgrade` (or `sudo rpm-ostree upgrade`) — pulls the daily-rebuilt image, verifies the cosign signature, stages, applies on next reboot.
+### Subsequent updates (both variants)
+
+`sudo bootc upgrade` (or `sudo rpm-ostree upgrade`) — pulls the latest image, verifies the cosign signature (if rebased signed), stages, applies on next reboot.
 
 ---
 
@@ -97,7 +130,7 @@ The image-template Containerfile literally has a commented hint about this: `# R
 
 Tempting to add (every machine wants Proton VPN), but it can't be image-baked: `proton-vpn-daemon` ships a `%posttrans` scriptlet that calls `systemctl daemon-reload` + `systemctl start`. In a build container `systemctl` returns *"System has not been booted with systemd as init system (PID 1). Can't operate."* → the scriptlet exits 1 → `dnf5` reports `Transaction failed: Rpm transaction failed.` and rolls back the **entire** transaction (every other package in the same `dnf5 install` line vanishes too — initial debugging is misleading because the failure is reported far from the offending package).
 
-No flag avoids this; the scriptlet exits 1 unconditionally on systemctl failure. Workaround: install proton-vpn on the live system via `rpm-ostree install` — `install-bazzite.sh`'s `RPM_PACKAGES` array keeps it for that path. Annika's machine, which doesn't run `install-bazzite.sh`, has no Proton VPN unless she layers it manually.
+No flag avoids this; the scriptlet exits 1 unconditionally on systemctl failure. Workaround: install proton-vpn on the live system via `rpm-ostree install` — handled by `install-bazzite.sh` in the [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts) repo. Machines that never run that script (e.g. ones consuming the image only) won't have Proton VPN unless layered manually.
 
 If you ever try to add proton-vpn to `build_files/build.sh`, the build will fail at the `dnf5 install` step with that exact transaction error — you've just rediscovered this gotcha.
 
@@ -162,29 +195,7 @@ After all three: `Warnings: 0`, `Checks skipped: 1` (a kernel-mode-only check th
 
 ---
 
-## Using the image
-
-### Initial rebase (one-time per machine)
-
-GHCR packages default to private. After the first build succeeds, mark them public via `gh api -X PATCH /user/packages/container/bazzite-custom -f visibility=public` (and same for `bazzite-nvidia-custom`), or via the GitHub web UI.
-
-Then on each machine:
-
-```bash
-# X1 Carbon (Intel only)
-sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-custom:latest
-
-# Atlas + Annika's machine (NVIDIA open)
-sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-nvidia-custom:latest
-
-sudo systemctl reboot
-```
-
-**First rebase note**: if your `/etc/containers/policy.json` doesn't yet have a trust rule pointing at `bazzite-custom.pub`, the signed rebase will fail. Either rebase via `ostree-unverified-image:` once first (the new image will then ship the pub key at `/etc/pki/containers/bazzite-custom.pub` so you can add the policy rule and re-rebase signed), or pre-add the policy rule before the first rebase.
-
-### Ongoing updates
-
-Automatic via `bootc upgrade` / `rpm-ostree upgrade` — pulls the daily-rebuilt image, verifies signature, stages, applies on next reboot.
+## Verification + GHCR notes
 
 ### Verifying a signature manually
 
@@ -192,6 +203,17 @@ Automatic via `bootc upgrade` / `rpm-ostree upgrade` — pulls the daily-rebuilt
 cosign verify --key cosign.pub ghcr.io/jakobhviid/bazzite-custom:latest
 cosign verify --key cosign.pub ghcr.io/jakobhviid/bazzite-nvidia-custom:latest
 ```
+
+### GHCR package visibility
+
+GHCR packages default to private. To make them publicly pullable (so machines can rebase without authenticating to GHCR), flip both via:
+
+```bash
+gh api -X PATCH /user/packages/container/bazzite-custom -f visibility=public
+gh api -X PATCH /user/packages/container/bazzite-nvidia-custom -f visibility=public
+```
+
+…or via the GitHub web UI under each package's settings.
 
 ---
 
