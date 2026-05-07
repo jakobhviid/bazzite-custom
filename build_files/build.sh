@@ -145,9 +145,16 @@ dnf5 install -y \
 # /opt/vivaldi/lib/ is read-only on the live system → it'll fall back to
 # ~/.local/lib/vivaldi/ (per-user) and that copy takes precedence over ours.
 # Acceptable: image-shipped is the default; user can always override.
-if compgen -G '/var/opt/vivaldi/media-codecs-*/libffmpeg.so' >/dev/null; then
+# Vivaldi's RPM creates BOTH a versioned symlink (media-codecs-X.Y) AND the
+# real directory it points to (media-codecs-git-DATE), each containing a
+# libffmpeg.so. A naive `cp /var/opt/vivaldi/media-codecs-*/libffmpeg.so`
+# expands to two paths that both resolve to the same physical file → cp
+# refuses with "will not overwrite just-created". `find -type f` filters
+# down to the real file(s) only; `head -1` picks one if multiple exist.
+ffmpeg_src=$(find /var/opt/vivaldi -path '*/media-codecs-*/libffmpeg.so' -type f 2>/dev/null | head -1)
+if [[ -n "$ffmpeg_src" ]]; then
     mkdir -p /opt/vivaldi/lib
-    cp /var/opt/vivaldi/media-codecs-*/libffmpeg.so /opt/vivaldi/lib/
+    cp "$ffmpeg_src" /opt/vivaldi/lib/
     rm -rf /var/opt/vivaldi
 fi
 
