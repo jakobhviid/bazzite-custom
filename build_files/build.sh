@@ -44,9 +44,16 @@ name=1Password Stable Channel
 baseurl=https://downloads.1password.com/linux/rpm/stable/$basearch
 enabled=1
 gpgcheck=1
-repo_gpgcheck=1
+repo_gpgcheck=0
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-1password
 EOF
+# repo_gpgcheck disabled deliberately. Upstream's official template sets it to
+# 1, but dnf5 has a known race (issue tracked, fix in 5.2.12+) where the key
+# isn't found in the keyring on first refresh — even with the canonical
+# file:///etc/pki/rpm-gpg/ pattern. Once F44's dnf5 picks up the fix, flip back
+# to 1. Package-level gpgcheck=1 continues to verify each RPM against this key,
+# which is the security-critical check; repo_gpgcheck only adds metadata-fetch
+# integrity, already covered by HTTPS+TLS to downloads.1password.com.
 
 # Proton VPN deliberately NOT in the image — its proton-vpn-daemon RPM ships a
 # %posttrans scriptlet that calls systemctl, which fails in a build container
@@ -54,9 +61,23 @@ EOF
 # ReinstallScripts/Linux/install-bazzite.sh on the live system, where systemd
 # is running and the scriptlet succeeds.
 
-# Claude Desktop (community-maintained RPM — no GPG signing upstream)
-curl -fsSLo /etc/yum.repos.d/claude-desktop.repo \
-  https://aaddrick.github.io/claude-desktop-debian/rpm/claude-desktop.repo
+# Claude Desktop (community-maintained RPM). Their upstream .repo enables
+# repo_gpgcheck=1 with a remote gpgkey URL, which trips the same dnf5 race
+# as 1Password. Fetch their key to disk and write our own .repo with
+# repo_gpgcheck=0; gpgcheck=1 still verifies each RPM against the key.
+curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-claude-desktop \
+  https://pkg.claude-desktop-debian.dev/KEY.gpg
+chmod 0644 /etc/pki/rpm-gpg/RPM-GPG-KEY-claude-desktop
+cat > /etc/yum.repos.d/claude-desktop.repo <<'EOF'
+[claude-desktop]
+name=Claude Desktop for Fedora/RHEL
+baseurl=https://pkg.claude-desktop-debian.dev/rpm/$basearch
+enabled=1
+gpgcheck=1
+repo_gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-claude-desktop
+metadata_expire=1h
+EOF
 
 # Vivaldi — official RPM repo + official key
 curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-vivaldi \
