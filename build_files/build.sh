@@ -136,3 +136,10 @@ dnf5 clean all
 # /run is a runtime-only tmpfs on the live system; bootc lint flags any content
 # left there at build time. dnf leaves a state dir behind even after clean all.
 rm -rf /run/dnf
+# /var/lib/dnf/repos/ accumulates per-repo cache directories (with hash
+# suffixes) and a 'countme' file from dnf's anonymous opt-in counter. We
+# don't run dnf on the live system (bootc-managed), so the cache is dead
+# weight AND triggers bootc lint var-tmpfiles warnings. /var/lib/dnf itself
+# stays — dnf's transaction history (history.sqlite, etc.) is part of normal
+# install state and is declared in usr/lib/tmpfiles.d/bazzite-custom.conf.
+rm -rf /var/lib/dnf/repos
