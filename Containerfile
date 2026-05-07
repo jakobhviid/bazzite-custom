@@ -12,6 +12,13 @@ COPY build_files /
 #   bazzite-gnome-nvidia-open → bazzite-nvidia-custom (NVIDIA open driver, Atlas + Annika)
 FROM ghcr.io/ublue-os/${BASE_IMAGE}:${BASE_TAG}
 
+# Bazzite (and other atomic Fedora variants) ship /opt as a symlink to /var/opt
+# so users can write to it on the live system. RPMs that install into /opt
+# (Brave, Vivaldi, 1Password, Claude Desktop) fail to unpack against that
+# symlink — "cpio: mkdir failed - File exists". Replace the symlink with a real
+# directory so /opt is part of the immutable image layer.
+RUN rm /opt && mkdir /opt
+
 # System-level files baked into / verbatim. Goes in BEFORE build.sh so dnf5 sees
 # any pre-staged repo configs and policy files at install time.
 COPY system_files/ /

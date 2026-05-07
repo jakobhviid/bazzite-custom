@@ -29,19 +29,11 @@ repo_gpgcheck=1
 gpgkey=https://downloads.1password.com/linux/keys/1password.asc
 EOF
 
-# Proton VPN — official RPM repo (per-Fedora-release URL)
-fedora_release="$(rpm -E %fedora)"
-curl -fsSLo "/etc/pki/rpm-gpg/RPM-GPG-KEY-protonvpn-${fedora_release}-stable" \
-  "https://repo.protonvpn.com/fedora-${fedora_release}-stable/public_key.asc"
-cat > /etc/yum.repos.d/protonvpn-stable.repo <<EOF
-[protonvpn-fedora-stable]
-name=Proton VPN Fedora Stable repository
-baseurl=https://repo.protonvpn.com/fedora-${fedora_release}-stable/
-enabled=1
-gpgcheck=1
-repo_gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-protonvpn-${fedora_release}-stable
-EOF
+# Proton VPN deliberately NOT in the image — its proton-vpn-daemon RPM ships a
+# %posttrans scriptlet that calls systemctl, which fails in a build container
+# (no systemd PID 1) and kills the whole dnf5 transaction. Stays layered via
+# ReinstallScripts/Linux/install-bazzite.sh on the live system, where systemd
+# is running and the scriptlet succeeds.
 
 # Claude Desktop (community-maintained RPM)
 curl -fsSLo /etc/yum.repos.d/claude-desktop.repo \
@@ -72,7 +64,6 @@ dnf5 install -y \
     brave-browser \
     vivaldi-stable \
     1password 1password-cli \
-    proton-vpn-gnome-desktop \
     claude-desktop \
     zen-browser \
     podman-compose \

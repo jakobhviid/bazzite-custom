@@ -73,11 +73,11 @@ Need to write a one-liner script for this. Could live in `ReinstallScripts/Linux
 
 ### 3. What to drop from `ReinstallScripts/Linux/install-bazzite.sh` once the image is in use
 Per your earlier instruction, **do not modify ReinstallScripts yet**. When ready, the cleanup is:
-- Remove from `RPM_PACKAGES`: `podman-compose`, `brave-browser`, `1password`, `proton-vpn-gnome-desktop`, `gnome-shell-extension-dash-to-panel`, `gnome-shell-extension-dash-to-dock`, `zsh`, `claude-desktop`, `zen-browser` (all baked into the image now)
+- Remove from `RPM_PACKAGES`: `podman-compose`, `brave-browser`, `1password`, `gnome-shell-extension-dash-to-panel`, `gnome-shell-extension-dash-to-dock`, `zsh`, `claude-desktop`, `zen-browser` (all baked into the image now)
+- **Keep `proton-vpn-gnome-desktop`** in `RPM_PACKAGES` — its `proton-vpn-daemon` posttrans scriptlet calls `systemctl`, which kills the dnf5 transaction in a build container (no PID 1 systemd). Works fine via `rpm-ostree install` on a live system. Means Annika's machine has no Proton VPN unless she runs install-bazzite.sh, which she currently doesn't — flag if she needs it.
 - Keep `gnome-extensions-cli` invocation for the 6 user-level extensions (`tilingshell`, `copyous`, `hide-minimized`, `quick-settings-audio-panel`, `quicksettings-audio-devices-renamer`, `CoverflowAltTab`) — these can't be RPMs
 - Keep all `run_config_*` (per-user dconf, autostart, .desktop overrides, PWAs, brave policy *file deployment* can be removed since image bakes it, 1pw allowed_browsers same)
 - The script becomes: brew bootstrap → brew bundle → gext → user dotfiles + dconf snapshots
-- Annika's machine still runs nothing — image alone covers her
 
 ### 4. Speaker EQ + unlock services
 Currently per-user via `install-bazzite.sh`:
