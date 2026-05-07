@@ -124,6 +124,33 @@ dnf5 install -y \
     unrar 7zip \
     gnome-tweaks
 
+# ─── Vivaldi codec relocation ────────────────────────────────────────────────
+# Vivaldi can't legally bundle proprietary H.264/AAC codecs. Their RPM ships an
+# update-ffmpeg downloader and the post-install scriptlet runs it, landing the
+# library at /var/opt/vivaldi/media-codecs-<ver>/libffmpeg.so.
+#
+# /var on bootc is per-deployment runtime state: image content in /var copies
+# to the live system on first install only, then is preserved across upgrades.
+# Keeping the codec there means a Vivaldi-version bump in our image would
+# update the binary in /opt (immutable layer) but NOT the codec in /var —
+# version skew, possibly breaking playback or crashing on ABI mismatch.
+#
+# Move the library to /opt/vivaldi/lib/ — one of Vivaldi's documented
+# system-wide search paths (per its update-ffmpeg script). Now the codec is
+# part of the immutable layer and updates atomically with the binary on every
+# rebase. Side effect: the bootc lint var-tmpfiles warning for the file goes
+# away because /var/opt/vivaldi no longer exists in the image.
+#
+# If a user later runs Vivaldi's own update-ffmpeg to fetch a newer codec,
+# /opt/vivaldi/lib/ is read-only on the live system → it'll fall back to
+# ~/.local/lib/vivaldi/ (per-user) and that copy takes precedence over ours.
+# Acceptable: image-shipped is the default; user can always override.
+if compgen -G '/var/opt/vivaldi/media-codecs-*/libffmpeg.so' >/dev/null; then
+    mkdir -p /opt/vivaldi/lib
+    cp /var/opt/vivaldi/media-codecs-*/libffmpeg.so /opt/vivaldi/lib/
+    rm -rf /var/opt/vivaldi
+fi
+
 # ─── Enable image-shipped system services ────────────────────────────────────
 # The system-preset file at /usr/lib/systemd/system-preset/90-bazzite-custom.preset
 # would also handle this on an installed system, but presets aren't auto-applied
