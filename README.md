@@ -9,7 +9,7 @@ Two image variants built in parallel from one Containerfile via a GHA matrix:
 | `ghcr.io/jakobhviid/bazzite-custom:latest` | `ghcr.io/ublue-os/bazzite-gnome:stable` | X1 Carbon Gen 13 (Intel only) |
 | `ghcr.io/jakobhviid/bazzite-nvidia-custom:latest` | `ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable` | Atlas (RTX 5090), Annika's desktop |
 
-Both signed with cosign. Both built daily at 06:30 UTC (and on every push to `main`).
+Both signed with cosign. The build runs on every push to `main` and polls upstream Bazzite every 3 hours — it only rebuilds when the upstream `:stable` digest has actually changed (see [Build pipeline](#build-pipeline) below for the digest-gated polling mechanism).
 
 ## Rebase a machine
 
@@ -147,13 +147,15 @@ A homegrown "list file + hash marker" approach (which I tried first) does NOT ha
 
 `/usr/lib/systemd/{system,user}-preset/<priority>-<name>.preset` files declare default-enable for shipped units. **For user units**, presets are evaluated automatically on user login — no build-time work needed. **For system units**, presets are NOT auto-applied during a container build, so you also need an explicit `systemctl enable <name>.service` in `build.sh` to lock the enable in. Without that, the unit ships but never starts.
 
-### 9. bootc lint warnings still in our image (acceptable)
+### 9. bootc lint — handling upstream packaging quirks via sysusers.d/tmpfiles.d
 
-After `bootc container lint`, two warnings remain:
-- **`sysusers`**: 1Password's `onepassword` and `onepassword-cli` groups exist in `/etc/group` without a corresponding `/usr/lib/sysusers.d/` snippet. Upstream packaging issue. Fixable by shipping `system_files/usr/lib/sysusers.d/onepassword.conf`.
-- **`var-tmpfiles`**: Vivaldi creates `/var/opt/vivaldi/media-codecs-7.9` (symlink) + dnf creates `/var/lib/dnf` during install — neither has a `/usr/lib/tmpfiles.d/` entry. Both addressable via custom snippets but not breaking.
+Bazzite's bootc lint pass surfaces three classes of warning that typically come from upstream RPMs not following bootc-friendly conventions:
 
-The `nonempty-run-tmp` warning was already fixed (`rm -rf /run/dnf` at end of `build.sh`).
+- **`nonempty-run-tmp`** (fixed): dnf leaves a state directory at `/run/dnf` after install. `/run` is a runtime tmpfs on the live system; lint flags any content there at build time. Fix: `rm -rf /run/dnf` at the end of `build.sh`.
+- **`sysusers`** (fixed): 1Password's RPM creates `onepassword` + `onepassword-cli` groups in `/etc/group` but ships no `sysusers.d` declaration. On bootc deploys that recreate `/etc`, the groups would be lost without one. Fix: `system_files/usr/lib/sysusers.d/bazzite-custom.conf` declares both with `-` (auto-GID).
+- **`var-tmpfiles`** (fixed): Vivaldi creates `/var/opt/vivaldi/media-codecs-7.9` symlink and dnf creates `/var/lib/dnf` directory; neither has `tmpfiles.d` entries. `/var` is runtime state on bootc, so anything that must exist there needs declaring. Fix: `system_files/usr/lib/tmpfiles.d/bazzite-custom.conf` declares both. **Brittle bit**: the Vivaldi symlink hardcodes `7.9` and a dated git suffix. If Vivaldi bumps version and the symlink shape changes, lint will flag a new warning and the tmpfiles entry needs updating.
+
+After all three: `Warnings: 0`, `Checks skipped: 1` (a kernel-mode-only check that doesn't apply).
 
 ---
 
@@ -195,11 +197,13 @@ cosign verify --key cosign.pub ghcr.io/jakobhviid/bazzite-nvidia-custom:latest
 `.github/workflows/build.yml`:
 
 - **Matrix**: `bazzite-gnome` + `bazzite-gnome-nvidia-open` → `bazzite-custom` + `bazzite-nvidia-custom`. Both legs run in parallel.
-- **Triggers**: push to `main` (excluding README/HANDOFF), daily cron at `30 06 * * *` UTC, manual `workflow_dispatch`.
-- **Cron timing**: 06:30 UTC, 30 min after Bazzite's own 06:00 UTC build, so we don't race against half-published upstream tags.
-- **Runtime**: ~5–7 min per leg with warm cache.
+- **Triggers**: push to `main` (excluding README), polling cron `30 */3 * * *` (every 3 hours), manual `workflow_dispatch`, plus `pull_request` (build-only, no push/sign).
+- **Digest-gated polling**: the first step (`Check if base image changed`) compares the upstream Bazzite `:stable` digest to a `phd.hviid.bazzite-custom.base-digest` label stored on our last published image. On scheduled runs where the digests match, every subsequent step is skipped via `if:`. Effective behavior: the cron is a "poll for upstream change" check that exits in <30s when nothing has changed; the actual build only fires when Bazzite has published. Pushes and `workflow_dispatch` always build (you want to test your own changes immediately, regardless of upstream state).
+- **Pickup latency**: at most 3 hours between Bazzite publishing a new `:stable` and our images being rebuilt from it.
+- **Runtime when build actually fires**: ~5–7 min per leg with warm cache.
 - **Concurrency**: per-variant cancel-in-progress (job-level, since matrix isn't visible at workflow-level concurrency).
 - **GHA secrets required**: `SIGNING_SECRET` (cosign private key), `COSIGN_PASSWORD` (passphrase).
+- **Cosign signs by digest**, not by tag — `cosign sign --key env://COSIGN_PRIVATE_KEY "${IMAGE}@${DIGEST}"` against the manifest digest from `steps.push.outputs.digest`. Binds the signature to the immutable manifest, silences the "uses a tag, not a digest" warning, and is one call instead of three (we previously looped over each tag).
 
 ---
 
@@ -228,10 +232,10 @@ To remove a flatpak from auto-install: delete its group from the `.preinstall` f
 ## Open follow-ups
 
 - **GHCR package visibility**: confirm both packages are public (`gh api ...` or web UI), otherwise machines need to authenticate to pull.
-- **bootc lint**: ship `system_files/usr/lib/sysusers.d/onepassword.conf` + `system_files/usr/lib/tmpfiles.d/bazzite-custom.conf` to clear the remaining 2 warnings (cosmetic).
 - **dnf5 race**: monitor F44's dnf5 version; flip `repo_gpgcheck=1` back on for 1Password + Claude Desktop once 5.2.12+ lands.
 - **`install-bazzite.sh` cleanup**: with this image in production, the `RPM_PACKAGES` array can drop everything we now bake (keep only `proton-vpn-gnome-desktop`). Held back per project decision; deliberate when ready.
 - **System SSH signing key for autonomous git commits**: a single-purpose Ed25519 SSH key at `~/.ssh/claude_signing_ed25519` is configured locally for this repo's commits. Public key not yet uploaded to GitHub as an SSH signing key (needs a `gh auth refresh -s admin:ssh_signing_key`), so commits show as "Unverified" until that's done. Cosmetic.
+- **redhat-actions Node 24 upgrade**: `redhat-actions/buildah-build` and `redhat-actions/push-to-registry` are pinned to v2 (Node 20). GitHub forces Node 24 from June 2026, removes Node 20 in September 2026. When the maintainers ship v3 with Node 24, bump the pinned commit SHAs in `.github/workflows/build.yml`. Will also likely silence the "image is not a manifest list" fallback-chain noise from the push step.
 
 ---
 

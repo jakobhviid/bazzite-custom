@@ -5,9 +5,12 @@ on:
     branches:
       - main
   schedule:
-    # 06:30 UTC daily — 30 min after Bazzite's own 06:00 UTC build, to avoid
-    # racing against half-published upstream tags.
-    - cron: '30 06 * * *'
+    # Every 3 hours, on the half-hour. Most invocations exit in <30s — the
+    # `Check if base image changed` step compares the upstream Bazzite
+    # `:stable` digest to the digest stored as a label on our last published
+    # image, and skips the rest of the workflow when nothing has changed.
+    # When Bazzite publishes a new stable, the next 3-hour tick picks it up.
+    - cron: '30 */3 * * *'
   push:
     branches:
       - main
@@ -21,6 +24,9 @@ env:
   IMAGE_LOGO_URL: "https://avatars.githubusercontent.com/u/120078124?s=200&v=4"
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
   DEFAULT_TAG: "latest"
+  # Custom OCI label key for storing the upstream base image digest. Read back
+  # by the `check_base` step on subsequent runs to gate scheduled builds.
+  BASE_DIGEST_LABEL: "phd.hviid.bazzite-custom.base-digest"
 
 jobs:
   build_push:
@@ -58,18 +64,62 @@ jobs:
           echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> ${GITHUB_ENV}
           echo "IMAGE_NAME=${IMAGE_NAME,,}" >> ${GITHUB_ENV}
 
+      # Compare the upstream Bazzite base digest to the digest stored as a
+      # label on our last published image. Skip the rest of the workflow on
+      # scheduled runs when they match (fast — single skopeo inspect each).
+      # Pushes and manual dispatches always proceed: they mean *we* changed
+      # something on our end and want a fresh build regardless of upstream.
+      - name: Check if base image changed
+        id: check_base
+        run: |
+          BASE="ghcr.io/ublue-os/${{ matrix.base_image }}:stable"
+          OURS="${IMAGE_REGISTRY}/${{ matrix.image_name }}:latest"
+
+          # Authenticate against GHCR so we can inspect our own image (which
+          # may be private). Tolerate failure — pull_request events from
+          # forks have read-only tokens and may not login; inspecting the
+          # upstream public Bazzite image works anonymously, and a failed
+          # inspect of ours just yields LAST="" → we proceed to build.
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            skopeo login ghcr.io --username "${{ github.actor }}" --password-stdin \
+            || echo "skopeo login failed (probably PR token); continuing anonymously"
+
+          # Upstream is public, never needs auth.
+          NEW=$(skopeo inspect "docker://$BASE" --format '{{.Digest}}')
+          # If our image doesn't exist yet (first build) or has no digest
+          # label (built by an older workflow), LAST is empty -> we build.
+          LAST=$(skopeo inspect "docker://$OURS" --format "{{ index .Labels \"${BASE_DIGEST_LABEL}\" }}" 2>/dev/null || echo "")
+
+          echo "Upstream $BASE digest: $NEW"
+          echo "Our last-built-against digest: ${LAST:-<none>}"
+
+          echo "new=$NEW"   >> "$GITHUB_OUTPUT"
+          echo "last=$LAST" >> "$GITHUB_OUTPUT"
+
+          if [[ "$NEW" == "$LAST" && "${{ github.event_name }}" == "schedule" ]]; then
+            echo "Base unchanged on a scheduled run — skipping build."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Building (event=${{ github.event_name }}, base $LAST -> $NEW)."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
+        if: steps.check_base.outputs.skip != 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Maximize build space
+        if: steps.check_base.outputs.skip != 'true'
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
 
       - name: Get current date
+        if: steps.check_base.outputs.skip != 'true'
         id: date
         run: |
           echo "date=$(date -u +%Y\-%m\-%d\T%H\:%M\:%S\Z)" >> $GITHUB_OUTPUT
 
       - name: Image Metadata
+        if: steps.check_base.outputs.skip != 'true'
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         id: metadata
         with:
@@ -95,10 +145,12 @@ jobs:
             io.artifacthub.package.logo-url=${{ env.IMAGE_LOGO_URL }}
             io.artifacthub.package.prerelease=false
             containers.bootc=1
+            ${{ env.BASE_DIGEST_LABEL }}=${{ steps.check_base.outputs.new }}
           sep-tags: " "
           sep-annotations: " "
 
       - name: Build Image
+        if: steps.check_base.outputs.skip != 'true'
         id: build_image
         uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2
         with:
@@ -113,7 +165,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -121,7 +173,7 @@ jobs:
 
       - name: Push To GHCR
         uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         id: push
         env:
           REGISTRY_USER: ${{ github.actor }}
@@ -135,19 +187,22 @@ jobs:
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         with:
           cosign-release: 'v2.6.1'
 
+      # Sign by digest (immutable manifest reference) rather than by each
+      # tag. The signature is bound to the bytes that were pushed; subsequent
+      # tag-moves (which we don't do, but could) wouldn't accidentally
+      # invalidate the trust path. Single cosign call replaces the previous
+      # per-tag loop and silences the "uses a tag, not a digest" warning.
       - name: Sign container image
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         run: |
           IMAGE_FULL="${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}"
-          for tag in ${{ steps.metadata.outputs.tags }}; do
-            cosign sign -y --key env://COSIGN_PRIVATE_KEY "$IMAGE_FULL:$tag"
-          done
+          DIGEST="${{ steps.push.outputs.digest }}"
+          cosign sign -y --key env://COSIGN_PRIVATE_KEY "${IMAGE_FULL}@${DIGEST}"
         env:
-          TAGS: ${{ steps.push.outputs.digest }}
           COSIGN_EXPERIMENTAL: false
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
