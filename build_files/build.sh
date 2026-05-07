@@ -92,8 +92,31 @@ gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-vivaldi
 EOF
 
+# Microsoft — VS Code repo only (NOT the .NET repo). The official .repo file
+# Microsoft ships at packages.microsoft.com/yumrepos/vscode/config.repo has
+# gpgcheck=0 — their docs' install instructions enable gpgcheck=1, so we follow
+# the docs. repo_gpgcheck disabled for the same dnf5 race reason as 1Password.
+curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-microsoft \
+  https://packages.microsoft.com/keys/microsoft.asc
+chmod 0644 /etc/pki/rpm-gpg/RPM-GPG-KEY-microsoft
+cat > /etc/yum.repos.d/vscode.repo <<'EOF'
+[code]
+name=Visual Studio Code
+baseurl=https://packages.microsoft.com/yumrepos/vscode
+enabled=1
+autorefresh=1
+type=rpm-md
+gpgcheck=1
+repo_gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-microsoft
+EOF
+
 # Zen Browser — Fedora COPR (the dnf5 copr plugin handles its own key + repo file)
 dnf5 -y copr enable sneexy/zen-browser
+
+# Atim's COPRs — well-maintained third-party COPR for tools not in main Fedora.
+dnf5 -y copr enable atim/starship
+dnf5 -y copr enable atim/lazygit
 
 # Firefox needs a matching openh264 — Bazzite ships -1 but mozilla-openh264 wants -2.
 # Enabling fedora-cisco-openh264 surfaces the -2 build.
@@ -108,10 +131,15 @@ dnf5 install -y \
     1password 1password-cli \
     claude-desktop \
     zen-browser \
+    code \
     podman-compose \
     gnome-shell-extension-dash-to-panel \
     gnome-shell-extension-dash-to-dock \
-    zsh
+    zsh \
+    zsh-autosuggestions zsh-syntax-highlighting \
+    bat btop butane eza fzf htop jq just tmux zoxide \
+    starship lazygit \
+    nerd-fonts
 
 # ─── Cleanup ─────────────────────────────────────────────────────────────────
 dnf5 clean all
