@@ -70,6 +70,10 @@ sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-n
 
 `sudo bootc upgrade` (or `sudo rpm-ostree upgrade`) — pulls the latest image, verifies the cosign signature (if rebased signed), stages, applies on next reboot.
 
+### Fresh-install ISO (when you want to flatten a machine)
+
+`Build disk images` workflow (`.github/workflows/build-disk.yml`) produces both a `qcow2` (VM disk) and an `anaconda-iso` (bootable installer) per image variant — `bazzite-custom` and `bazzite-nvidia-custom` — every Sunday at 03:00 UTC. The ISO's kickstart `bootc switch`es the just-installed system to the matching `ghcr.io/jakobhviid/<variant>:latest`, so the resulting machine is identical to one rebased from stock Bazzite via the rebase steps above. Manual run: `gh workflow run build-disk.yml --repo jakobhviid/bazzite-custom --ref main`. Artifacts on the workflow run page in the Actions tab.
+
 ---
 
 ## What's baked in
