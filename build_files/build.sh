@@ -157,6 +157,17 @@ dnf5 install -y \
     unrar 7zip \
     gnome-tweaks
 
+# ─── Refresh icon cache so newly-installed apps' icons resolve ──────────────
+# Some packages (notably zen-browser) install icons under /usr/share/icons/
+# hicolor/ but don't run gtk-update-icon-cache in their %post scriptlet.
+# Result on the live system: the .desktop file has Icon=zen-browser, the PNG
+# files exist at /usr/share/icons/hicolor/<size>/apps/zen-browser.png, but
+# the cache (icon-theme.cache) doesn't list zen-browser entries — so GTK's
+# IconTheme.has_icon("zen-browser") returns False and apps fall back to the
+# generic application icon. Forcing a cache rebuild here ensures the image
+# ships a complete cache that includes all newly-installed apps.
+gtk-update-icon-cache --force /usr/share/icons/hicolor
+
 # ─── Vivaldi codec relocation ────────────────────────────────────────────────
 # Vivaldi can't legally bundle proprietary H.264/AAC codecs. Their RPM ships an
 # update-ffmpeg downloader and the post-install scriptlet runs it, landing the
