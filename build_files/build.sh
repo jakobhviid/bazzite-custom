@@ -34,26 +34,16 @@ gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-brave-browser
 EOF
 
-# 1Password — official RPM repo + official key
-curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-1password \
-  https://downloads.1password.com/linux/keys/1password.asc
-chmod 0644 /etc/pki/rpm-gpg/RPM-GPG-KEY-1password
-cat > /etc/yum.repos.d/1password.repo <<'EOF'
-[1password]
-name=1Password Stable Channel
-baseurl=https://downloads.1password.com/linux/rpm/stable/$basearch
-enabled=1
-gpgcheck=1
-repo_gpgcheck=0
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-1password
-EOF
-# repo_gpgcheck disabled deliberately. Upstream's official template sets it to
-# 1, but dnf5 has a known race (issue tracked, fix in 5.2.12+) where the key
-# isn't found in the keyring on first refresh — even with the canonical
-# file:///etc/pki/rpm-gpg/ pattern. Once F44's dnf5 picks up the fix, flip back
-# to 1. Package-level gpgcheck=1 continues to verify each RPM against this key,
-# which is the security-critical check; repo_gpgcheck only adds metadata-fetch
-# integrity, already covered by HTTPS+TLS to downloads.1password.com.
+# 1Password deliberately NOT in the image — its install model is per-user
+# (the RPM %post adds the live user to the onepassword group; no live user
+# exists in a build container). We tried baking it (pinned GIDs, sysusers.d,
+# manual usermod plumbing) and the IPC group check still rejected browser
+# extension connections on rebased machines. Switched to brew cask
+# `ublue-os/tap/1password-gui-linux` on the userspace side instead — the
+# uBlue tap automates setgid + native messaging manifests + custom_allowed_browsers
+# via PR #296 (merged 2026-04-05), and runs as the live user so per-user
+# group setup just works. The CLI (`op`) is dropped — was nice-to-have, not
+# needed.
 
 # Proton VPN deliberately NOT in the image — its proton-vpn-daemon RPM ships a
 # %posttrans scriptlet that calls systemctl, which fails in a build container
@@ -120,29 +110,12 @@ mkdir -p /usr/share/wireplumber/wireplumber.conf.d
 curl -fsSLo /usr/share/wireplumber/wireplumber.conf.d/rename-devices.conf \
     "${RS_RAW}/Linux/assets/rename-devices.conf"
 
-# ─── Pre-create 1Password's groups in the system GID range ──────────────────
-# Without this, 1Password's RPM %post scriptlet runs `groupadd onepassword`
-# (no -r flag), which picks the next free GID >= 1000. In our build container
-# no other users exist, so onepassword grabs GID 1000. The scriptlet then
-# chowns /opt/1Password/1Password-BrowserSupport to root:1000 (and the bit
-# is setgid). On the live system GID 1000 belongs to the first regular user
-# (typically `jakob`), so the binary's setgid effectively does NOTHING for
-# that user — effective GID == real GID — and the kernel doesn't set
-# AT_SECURE. 1Password-BrowserSupport then aborts with
-# "process detected it was running without libc's security" the moment any
-# browser tries to talk to the desktop app via the native messaging host.
-# Pre-creating with `groupadd -r` puts onepassword/onepassword-cli in the
-# system range (< 1000) so they don't collide with the user.
-getent group onepassword     >/dev/null || groupadd -r onepassword
-getent group onepassword-cli >/dev/null || groupadd -r onepassword-cli
-
 # ─── Install the system layer ────────────────────────────────────────────────
 
 dnf5 install -y \
     firefox firefox-langpacks \
     brave-browser \
     vivaldi-stable \
-    1password 1password-cli \
     claude-desktop \
     zen-browser \
     podman-compose \

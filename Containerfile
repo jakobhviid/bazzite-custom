@@ -14,7 +14,7 @@ FROM ghcr.io/ublue-os/${BASE_IMAGE}:${BASE_TAG}
 
 # Bazzite (and other atomic Fedora variants) ship /opt as a symlink to /var/opt
 # so users can write to it on the live system. RPMs that install into /opt
-# (Brave, Vivaldi, 1Password, Claude Desktop) fail to unpack against that
+# (Brave, Vivaldi, Claude Desktop) fail to unpack against that
 # symlink — "cpio: mkdir failed - File exists". Replace the symlink with a real
 # directory so /opt is part of the immutable image layer.
 RUN rm /opt && mkdir /opt

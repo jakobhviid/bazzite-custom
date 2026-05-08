@@ -74,13 +74,12 @@ sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-n
 
 ## What's baked in
 
-**RPMs from Fedora F44 main:** firefox, firefox-langpacks, brave-browser, vivaldi-stable, 1password, 1password-cli, claude-desktop, zen-browser, podman-compose, gnome-shell-extension-{dash-to-panel,dash-to-dock}, zsh, bat, btop, butane, eza, fzf, htop, jq, just, tmux, zoxide, zsh-autosuggestions, zsh-syntax-highlighting, libheif-tools, unrar, 7zip, gnome-tweaks, nerd-fonts.
+**RPMs from Fedora F44 main:** firefox, firefox-langpacks, brave-browser, vivaldi-stable, claude-desktop, zen-browser, podman-compose, gnome-shell-extension-{dash-to-panel,dash-to-dock}, zsh, bat, btop, butane, eza, fzf, htop, jq, just, tmux, zoxide, zsh-autosuggestions, zsh-syntax-highlighting, libheif-tools, unrar, 7zip, gnome-tweaks, nerd-fonts.
 
-**RPMs from custom repos:** brave (brave-browser-rpm-release.s3), 1password (1password.com), vivaldi (repo.vivaldi.com), claude-desktop (aaddrick.github.io community repo), zen-browser (Fedora COPR `sneexy/zen-browser`), starship + lazygit (`atim/starship`, `atim/lazygit` COPRs).
+**RPMs from custom repos:** brave (brave-browser-rpm-release.s3), vivaldi (repo.vivaldi.com), claude-desktop (aaddrick.github.io community repo), zen-browser (Fedora COPR `sneexy/zen-browser`), starship + lazygit (`atim/starship`, `atim/lazygit` COPRs).
 
 **System config files:**
 - `/etc/brave/policies/managed/brave-policy.json` — full Brave hardening + Qwant default search. **Fetched at image build time from [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts/blob/main/Linux/assets/brave-policy.json)** — that's the canonical editable source. To change the policy: edit `Linux/assets/brave-policy.json` in ReinstallScripts → push → next image build picks it up automatically.
-- `/etc/1password/custom_allowed_browsers` — vivaldi-bin + zen-bin (so 1Password browser extension talks to non-Chrome/Firefox browsers)
 - `/etc/xdg/mimeapps.list` — Brave as system default browser (per-user override still wins)
 - `/etc/pki/containers/bazzite-custom.pub` — cosign public key for client-side update verification
 - `/usr/share/wireplumber/wireplumber.conf.d/rename-devices.conf` — friendly names for Sonos Ace + Sennheiser BTD 700 (no-op when those devices aren't connected). **Fetched at image build time from [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts/blob/main/Linux/assets/rename-devices.conf)** — same pattern as the brave policy.
@@ -120,7 +119,7 @@ sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-n
 
 ### 1. `/opt` is symlinked to `/var/opt` on Bazzite — must replace with a real directory
 
-Atomic Fedora variants ship `/opt → /var/opt` so users can write to it on the live system. RPMs that install into `/opt` (Brave, Vivaldi, 1Password, Claude Desktop) fail to unpack against that symlink with `cpio: mkdir failed - File exists` and the install aborts.
+Atomic Fedora variants ship `/opt → /var/opt` so users can write to it on the live system. RPMs that install into `/opt` (Brave, Vivaldi, Claude Desktop) fail to unpack against that symlink with `cpio: mkdir failed - File exists` and the install aborts.
 
 Fix in `Containerfile`: `RUN rm /opt && mkdir /opt` before any `dnf install`. This makes `/opt` part of the immutable image layer (like `/usr`). Apps in `/opt` now version with the OS — `bootc rollback` reverts them with the rest. Trade-off: you can't manually drop a tarball into `/opt` at runtime; use `/usr/local/` or `~/.local/` if you need to.
 
@@ -156,7 +155,7 @@ Even with `gpgkey=file:///etc/pki/rpm-gpg/...` correctly set on disk, dnf5 in F4
 
 Workaround: set `repo_gpgcheck=0` for affected repos. **Critically**: package-level `gpgcheck=1` continues to verify each RPM against the imported key, which is the security-critical check. `repo_gpgcheck=1` only adds metadata-fetch integrity, already covered by HTTPS+TLS to the upstream domains.
 
-Affected in our build: 1Password (upstream template enables `repo_gpgcheck=1`), Claude Desktop (community repo enables it). Once F44's dnf5 picks up 5.2.12+, flip the flag back to 1.
+Affected in our build: Claude Desktop (community repo enables `repo_gpgcheck=1`). Once F44's dnf5 picks up 5.2.12+, flip the flag back to 1.
 
 ### 5. GitHub forks suppress the first push-triggered workflow run
 
@@ -185,7 +184,6 @@ A homegrown "list file + hash marker" approach (which I tried first) does NOT ha
 Bazzite's bootc lint pass surfaces three classes of warning that typically come from upstream RPMs not following bootc-friendly conventions:
 
 - **`nonempty-run-tmp`** (fixed): dnf leaves a state directory at `/run/dnf` after install. `/run` is a runtime tmpfs on the live system; lint flags any content there at build time. Fix: `rm -rf /run/dnf` at the end of `build.sh`.
-- **`sysusers`** (fixed): 1Password's RPM creates `onepassword` + `onepassword-cli` groups in `/etc/group` but ships no `sysusers.d` declaration. On bootc deploys that recreate `/etc`, the groups would be lost without one. Fix: `system_files/usr/lib/sysusers.d/bazzite-custom.conf` declares both with `-` (auto-GID).
 - **`var-tmpfiles`** (fixed): dnf leaves cache directories at `/var/lib/dnf/repos/*` after install; Vivaldi auto-downloads `libffmpeg.so` to `/var/opt/vivaldi/media-codecs-*/`. `/var` is runtime state on bootc, so content there should be declared via `tmpfiles.d` or removed. Fixes:
    - `build_files/build.sh` `rm -rf /var/lib/dnf/repos` after `dnf5 clean all` (cache isn't needed at runtime — system is bootc-managed, not dnf-installed).
    - `build_files/build.sh` relocates Vivaldi's `libffmpeg.so` from `/var/opt/vivaldi/media-codecs-*/` to `/opt/vivaldi/lib/libffmpeg.so` (one of Vivaldi's documented search paths) and `rm -rf`'s `/var/opt/vivaldi`. **This is more than a lint fix** — it's a real bootc semantics improvement: keeping the codec in `/var` would mean Vivaldi binary updates in `/opt` would NOT update the codec library (since `/var` is preserved across upgrades), causing version skew. Now the codec is in the immutable image layer and updates atomically with the binary.
@@ -237,8 +235,8 @@ gh api -X PATCH /user/packages/container/bazzite-nvidia-custom -f visibility=pub
 - Algorithm: ECDSA P-256 (cosign default).
 - Passphrase-encrypted private key.
 - Public key committed at `cosign.pub` (repo root) and baked into the image at `/etc/pki/containers/bazzite-custom.pub`.
-- Local key material stored in 1Password as a Document (cosign.key, cosign.key.decrypted, cosign.pub, passphrase).
-- Decrypted key derivation: `scripts/decrypt-cosign-key.py` (reads the cosign envelope: scrypt-derived key + nacl secretbox over PKCS#8 DER, outputs standard PKCS#8 PEM). Run as `COSIGN_PASSWORD='<passphrase>' python3 scripts/decrypt-cosign-key.py cosign.key > cosign.key.decrypted`. Useful when you need the unencrypted key for archival in 1Password — cosign itself ships no `export` subcommand.
+- Local key material stored in a password manager as a Document (cosign.key, cosign.key.decrypted, cosign.pub, passphrase).
+- Decrypted key derivation: `scripts/decrypt-cosign-key.py` (reads the cosign envelope: scrypt-derived key + nacl secretbox over PKCS#8 DER, outputs standard PKCS#8 PEM). Run as `COSIGN_PASSWORD='<passphrase>' python3 scripts/decrypt-cosign-key.py cosign.key > cosign.key.decrypted`. Useful when you need the unencrypted key for archival — cosign itself ships no `export` subcommand.
 
 ---
 
@@ -257,7 +255,7 @@ To remove a flatpak from auto-install: delete its group from the `.preinstall` f
 ## Open follow-ups
 
 - **GHCR package visibility**: confirm both packages are public (`gh api ...` or web UI), otherwise machines need to authenticate to pull.
-- **dnf5 race**: monitor F44's dnf5 version; flip `repo_gpgcheck=1` back on for 1Password + Claude Desktop once 5.2.12+ lands.
+- **dnf5 race**: monitor F44's dnf5 version; flip `repo_gpgcheck=1` back on for Claude Desktop once 5.2.12+ lands.
 - **`install-bazzite.sh` cleanup**: with this image in production, the `RPM_PACKAGES` array can drop everything we now bake (keep only `proton-vpn-gnome-desktop`). Held back per project decision; deliberate when ready.
 - **System SSH signing key for autonomous git commits**: a single-purpose Ed25519 SSH key at `~/.ssh/claude_signing_ed25519` is configured locally for this repo's commits. Public key not yet uploaded to GitHub as an SSH signing key (needs a `gh auth refresh -s admin:ssh_signing_key`), so commits show as "Unverified" until that's done. Cosmetic.
 - **redhat-actions Node 24 upgrade**: `redhat-actions/buildah-build` and `redhat-actions/push-to-registry` are pinned to v2 (Node 20). GitHub forces Node 24 from June 2026, removes Node 20 in September 2026. When the maintainers ship v3 with Node 24, bump the pinned commit SHAs in `.github/workflows/build.yml`. Will also likely silence the "image is not a manifest list" fallback-chain noise from the push step.
