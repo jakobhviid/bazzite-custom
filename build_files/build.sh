@@ -120,6 +120,22 @@ mkdir -p /usr/share/wireplumber/wireplumber.conf.d
 curl -fsSLo /usr/share/wireplumber/wireplumber.conf.d/rename-devices.conf \
     "${RS_RAW}/Linux/assets/rename-devices.conf"
 
+# ─── Pre-create 1Password's groups in the system GID range ──────────────────
+# Without this, 1Password's RPM %post scriptlet runs `groupadd onepassword`
+# (no -r flag), which picks the next free GID >= 1000. In our build container
+# no other users exist, so onepassword grabs GID 1000. The scriptlet then
+# chowns /opt/1Password/1Password-BrowserSupport to root:1000 (and the bit
+# is setgid). On the live system GID 1000 belongs to the first regular user
+# (typically `jakob`), so the binary's setgid effectively does NOTHING for
+# that user — effective GID == real GID — and the kernel doesn't set
+# AT_SECURE. 1Password-BrowserSupport then aborts with
+# "process detected it was running without libc's security" the moment any
+# browser tries to talk to the desktop app via the native messaging host.
+# Pre-creating with `groupadd -r` puts onepassword/onepassword-cli in the
+# system range (< 1000) so they don't collide with the user.
+getent group onepassword     >/dev/null || groupadd -r onepassword
+getent group onepassword-cli >/dev/null || groupadd -r onepassword-cli
+
 # ─── Install the system layer ────────────────────────────────────────────────
 
 dnf5 install -y \
