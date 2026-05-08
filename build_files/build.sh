@@ -103,6 +103,23 @@ dnf5 -y copr enable atim/lazygit
 # Enabling fedora-cisco-openh264 surfaces the -2 build.
 dnf5 -y config-manager setopt fedora-cisco-openh264.enabled=1
 
+# ─── Pull canonical configs from ReinstallScripts ────────────────────────────
+# These two files live in jakobhviid/ReinstallScripts as the editable source
+# of truth (they also need to be on stock Bazzite for `just brave` testing
+# and for any per-user wireplumber overrides). Fetching at image build time
+# means: change the policy in ReinstallScripts → push → next image build
+# picks it up automatically, no manual sync between repos. Path contract:
+# don't move these files in ReinstallScripts without updating these URLs.
+RS_RAW="https://raw.githubusercontent.com/jakobhviid/ReinstallScripts/main"
+
+mkdir -p /etc/brave/policies/managed
+curl -fsSLo /etc/brave/policies/managed/brave-policy.json \
+    "${RS_RAW}/Linux/assets/brave-policy.json"
+
+mkdir -p /usr/share/wireplumber/wireplumber.conf.d
+curl -fsSLo /usr/share/wireplumber/wireplumber.conf.d/rename-devices.conf \
+    "${RS_RAW}/Linux/assets/rename-devices.conf"
+
 # ─── Install the system layer ────────────────────────────────────────────────
 
 dnf5 install -y \

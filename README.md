@@ -79,11 +79,11 @@ sudo rpm-ostree rebase ostree-image-signed:registry:ghcr.io/jakobhviid/bazzite-n
 **RPMs from custom repos:** brave (brave-browser-rpm-release.s3), 1password (1password.com), vivaldi (repo.vivaldi.com), claude-desktop (aaddrick.github.io community repo), zen-browser (Fedora COPR `sneexy/zen-browser`), starship + lazygit (`atim/starship`, `atim/lazygit` COPRs).
 
 **System config files:**
-- `/etc/brave/policies/managed/brave-policy.json` — full Brave hardening + Qwant default search
+- `/etc/brave/policies/managed/brave-policy.json` — full Brave hardening + Qwant default search. **Fetched at image build time from [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts/blob/main/Linux/assets/brave-policy.json)** — that's the canonical editable source. To change the policy: edit `Linux/assets/brave-policy.json` in ReinstallScripts → push → next image build picks it up automatically.
 - `/etc/1password/custom_allowed_browsers` — vivaldi-bin + zen-bin (so 1Password browser extension talks to non-Chrome/Firefox browsers)
 - `/etc/xdg/mimeapps.list` — Brave as system default browser (per-user override still wins)
 - `/etc/pki/containers/bazzite-custom.pub` — cosign public key for client-side update verification
-- `/usr/share/wireplumber/wireplumber.conf.d/rename-devices.conf` — friendly names for Sonos Ace + Sennheiser BTD 700 (no-op when those devices aren't connected)
+- `/usr/share/wireplumber/wireplumber.conf.d/rename-devices.conf` — friendly names for Sonos Ace + Sennheiser BTD 700 (no-op when those devices aren't connected). **Fetched at image build time from [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts/blob/main/Linux/assets/rename-devices.conf)** — same pattern as the brave policy.
 
 **System services baked in:**
 - `/usr/lib/systemd/system/bazzite-custom-flatpaks.service` — runs `flatpak preinstall -y --noninteractive` on boot, applies the file at `/usr/share/flatpak/preinstall.d/bazzite-custom.preinstall` (33 Flathub apps). Auto-enabled via `/usr/lib/systemd/system-preset/90-bazzite-custom.preset`.
