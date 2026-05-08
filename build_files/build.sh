@@ -126,6 +126,11 @@ dnf5 install -y \
     bat btop butane eza fzf htop jq just tmux zoxide \
     starship lazygit \
     nerd-fonts \
+    rsms-inter-fonts \
+    jetbrains-mono-fonts \
+    cascadia-code-fonts cascadia-code-nf-fonts \
+    google-roboto-fonts google-roboto-mono-fonts \
+    dejavu-sans-fonts dejavu-serif-fonts dejavu-sans-mono-fonts \
     libheif-tools \
     unrar 7zip \
     gnome-tweaks
