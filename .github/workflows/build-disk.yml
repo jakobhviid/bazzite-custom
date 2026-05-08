@@ -1,14 +1,39 @@
 ---
 name: Build disk images
 
-# Triggered weekly to produce installable disk images for both image variants
-# (bazzite-custom and bazzite-nvidia-custom) so a fresh-install ISO is always
-# available alongside the current rolling :latest container image. Also
-# manually triggerable for ad-hoc builds.
+# DISABLED: this workflow does not work against our base image.
 #
-# Cron is Sunday 03:00 UTC — quiet time, well after the container build
-# cron (`30 */3 * * *`) so the latest weekly disk image is built against
-# the most recent published container image.
+# bootc-image-builder runs DNF depsolve inside its own container
+# (quay.io/centos-bootc/bootc-image-builder), then tries to read the
+# `file:///etc/pki/rpm-gpg/...` keys referenced in the *target* image's
+# repo configs. bib's container has its own /etc/pki/rpm-gpg and does NOT
+# see the keys that exist inside our image, so any repo with file:// GPG
+# key references fails depsolve. Bazzite base ships ~10 such repos
+# (terra-mesa, terra-mesa-source, fedora-debuginfo, updates-archive, all
+# the terra-* per-Fedora-version variants). All hit the same wall.
+#
+# Other issues we already worked around earlier in this file's history
+# (missing iso.toml, kickstart pointing at upstream image, missing
+# --rootfs btrfs flag, no nvidia variant) are still solved — but the
+# depsolve issue would need either:
+#   (a) pre-staging the image's GPG keys into bib's container at build
+#       time, or
+#   (b) stripping unreachable third-party repos from the image's
+#       /etc/yum.repos.d/ just for the bib depsolve, leaving the
+#       published image untouched, or
+#   (c) abandoning the ublue-os/image-template's build-disk.yml
+#       boilerplate (designed for minimal bootc bases) and adopting
+#       whatever pipeline bazzite.gg uses to produce its own ISOs.
+#
+# All three are real engineering, not quick fixes. For our 3-machine
+# fleet, the rebase-from-stock-Bazzite path (install-bazzite.sh in
+# ReinstallScripts) already works and is well-validated. Disk-image
+# building has no current value to justify the work.
+#
+# Triggers stripped to workflow_dispatch only — file kept for future
+# revival if/when uBlue's bazzite-iso pipeline becomes easy to adopt.
+# Run via `gh workflow run build-disk.yml` if you want to retry, but
+# expect failures unless one of (a)/(b)/(c) above has been done first.
 
 on:
   workflow_dispatch:
@@ -25,14 +50,6 @@ on:
         options:
           - amd64
           - arm64
-  schedule:
-    - cron: '0 3 * * 0'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - './disk_config/**'
-      - './.github/workflows/build-disk.yml'
 
 env:
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"  # do not edit
