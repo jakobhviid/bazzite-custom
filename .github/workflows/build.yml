@@ -163,6 +163,89 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ matrix.base_image }}
 
+      # Rechunk: split the single big custom layer into ~127 stable,
+      # RPM-ownership-grouped chunks so update pulls only re-download chunks
+      # whose RPMs actually changed. Typical weekly Bazzite-base bump: ~50-200
+      # MB delta instead of ~900 MB-1 GB. Uses native `rpm-ostree compose
+      # build-chunked-oci` from the just-built image itself — no external
+      # rechunk container or action needed (Bazzite's own current pattern).
+      - name: Rechunk image
+        if: steps.check_base.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${IMAGE_NAME}"
+          TAGS="${{ steps.metadata.outputs.tags }}"
+
+          # Stable internal handoff tags so this script doesn't depend on
+          # which order docker/metadata-action emits its tag list in.
+          INPUT_TAG="rechunk-input"
+          OUTPUT_TAG="rechunk-output"
+          ARCHIVE_IN="/tmp/${IMAGE}-in.tar"
+
+          # Pick *any* metadata tag from the rootless build to ferry across.
+          # All tags reference the same image in rootless storage, so any
+          # works as the source.
+          SOURCE_TAG="$(echo "$TAGS" | awk '{print $1}')"
+          echo "::group::Bridge rootless -> rootful storage (source tag: ${SOURCE_TAG})"
+
+          # buildah-build@v2 writes to rootless storage; chunking needs rootful
+          # podman --privileged. Bridge via oci-archive.
+          buildah push "${IMAGE}:${SOURCE_TAG}" "oci-archive:${ARCHIVE_IN}"
+          sudo skopeo copy "oci-archive:${ARCHIVE_IN}" \
+            "containers-storage:localhost/${IMAGE}:${INPUT_TAG}"
+          rm -f "${ARCHIVE_IN}"
+          echo "::endgroup::"
+
+          echo "::group::Pre-chunk hygiene (drop /run, /tmp cruft)"
+          # Bazzite's published pattern — keep junk files out of the chunks.
+          CTR=$(sudo buildah from "localhost/${IMAGE}:${INPUT_TAG}")
+          MNT=$(sudo buildah mount "$CTR")
+          sudo bash -c "rm -rf $MNT/run/.* $MNT/run/* $MNT/tmp/.* $MNT/tmp/* 2>/dev/null || true"
+          sudo buildah umount "$CTR"
+          sudo buildah commit --identity-label=false --rm "$CTR" \
+            "localhost/${IMAGE}:${INPUT_TAG}"
+          echo "::endgroup::"
+
+          echo "::group::rpm-ostree compose build-chunked-oci"
+          # --from takes a *bare* image ref (no transport prefix) — rpm-ostree
+          # prepends `containers-storage:` itself. --output takes a
+          # transport-prefixed ref. Matches Bazzite's upstream invocation.
+          # --max-layers 127 stays under the OCI 128-layer ceiling.
+          sudo podman run --rm --privileged \
+            --volume /var/lib/containers:/var/lib/containers \
+            "localhost/${IMAGE}:${INPUT_TAG}" \
+            rpm-ostree compose build-chunked-oci \
+              --bootc \
+              --max-layers 127 \
+              --format-version 2 \
+              --from "localhost/${IMAGE}:${INPUT_TAG}" \
+              --output "containers-storage:localhost/${IMAGE}:${OUTPUT_TAG}"
+          echo "::endgroup::"
+
+          echo "::group::Verify chunked layer count"
+          LAYERS=$(sudo podman inspect "localhost/${IMAGE}:${OUTPUT_TAG}" \
+            --format '{{len .RootFS.Layers}}')
+          echo "Chunked image has ${LAYERS} layers (was 1-2 before chunking)."
+          if [[ "${LAYERS}" -lt 10 ]]; then
+            echo "::error::Chunked image has only ${LAYERS} layers — chunking likely didn't take effect."
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          # Chunked image now lives in rootful containers-storage as
+          # localhost/${IMAGE}:${OUTPUT_TAG}. The downstream push step copies
+          # directly from there to GHCR via sudo skopeo (matches Bazzite's
+          # upstream flow). Earlier attempts to bridge the image back into
+          # rootless storage hit `Error during unshare(...): Operation not
+          # permitted` from apparmor restrictions on user namespaces on the
+          # ubuntu-24.04 runner — doing everything rootful sidesteps that.
+          echo "Rechunk complete. ${LAYERS} layers, ready for push."
+
+      # docker/login-action writes ~/.docker/config.json for the runner
+      # user. cosign reads that by default, so this is needed even though
+      # the push step below uses inline creds (sudo skopeo can't see the
+      # runner-user docker config easily).
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -171,19 +254,61 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Direct sudo skopeo push from rootful containers-storage. Replaces
+      # redhat-actions/push-to-registry@v2, which uses rootless buildah —
+      # and rootless ops on this runner hit `Error during unshare(...):
+      # Operation not permitted` from apparmor's user-namespace restriction.
+      # Pushing rootful sidesteps that and matches Bazzite's upstream flow.
+      #
+      # Push-once-then-tag-by-digest pattern: the first push converts the
+      # source manifest format (docker v2 in containers-storage -> OCI on
+      # the wire) and produces digest D. If we then `skopeo copy` from the
+      # SAME containers-storage source to each remaining tag, subsequent
+      # pushes silently produce *different* digests because skopeo takes a
+      # slightly different code path when the registry already has the
+      # blobs. The result: :latest signed with one digest, the dated tags
+      # with another, and `cosign verify` fails on the tag whose
+      # signature wasn't taken. Instead, push once for real, then `skopeo
+      # copy docker://reg/img@<digest> docker://reg/img:<tag>` per remaining
+      # tag — a manifest-only re-tag that guarantees all tags resolve to
+      # the same digest D (the one cosign signs).
       - name: Push To GHCR
-        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2
         if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         id: push
+        shell: bash
         env:
           REGISTRY_USER: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ github.token }}
-        with:
-          registry: ${{ env.IMAGE_REGISTRY }}
-          image: ${{ env.IMAGE_NAME }}
-          tags: ${{ steps.metadata.outputs.tags }}
-          username: ${{ env.REGISTRY_USER }}
-          password: ${{ env.REGISTRY_PASSWORD }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REGISTRY="${IMAGE_REGISTRY}"
+          IMAGE="${IMAGE_NAME}"
+          TAGS="${{ steps.metadata.outputs.tags }}"
+          SOURCE="containers-storage:localhost/${IMAGE}:rechunk-output"
+
+          PRIMARY_TAG="$(echo "$TAGS" | awk '{print $1}')"
+          PRIMARY_DEST="docker://${REGISTRY}/${IMAGE}:${PRIMARY_TAG}"
+
+          echo "First push (full upload, format=oci): ${PRIMARY_DEST}"
+          sudo skopeo copy --format=oci --digestfile /tmp/push-digest \
+            --dest-creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
+            "${SOURCE}" "${PRIMARY_DEST}"
+          DIGEST="$(sudo cat /tmp/push-digest)"
+          sudo rm -f /tmp/push-digest
+          echo "  digest: ${DIGEST}"
+
+          for TAG in $TAGS; do
+            if [[ "$TAG" == "$PRIMARY_TAG" ]]; then continue; fi
+            echo "Re-tagging by digest: ${TAG}"
+            sudo skopeo copy \
+              --src-creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
+              --dest-creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
+              "docker://${REGISTRY}/${IMAGE}@${DIGEST}" \
+              "docker://${REGISTRY}/${IMAGE}:${TAG}"
+          done
+
+          # All tags now resolve to ${DIGEST}; cosign step signs that digest.
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
