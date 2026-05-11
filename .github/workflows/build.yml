@@ -163,6 +163,67 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ matrix.base_image }}
 
+      # Rechunk: split the single big custom layer into ~127 stable,
+      # RPM-ownership-grouped chunks so update pulls only re-download chunks
+      # whose RPMs actually changed. Typical weekly Bazzite-base bump: ~50-200
+      # MB delta instead of ~900 MB-1 GB. Uses native `rpm-ostree compose
+      # build-chunked-oci` from the just-built image itself — no external
+      # rechunk container or action needed (Bazzite's own current pattern).
+      - name: Rechunk image
+        if: steps.check_base.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${IMAGE_NAME}"
+          TAGS="${{ steps.metadata.outputs.tags }}"
+          FIRST_TAG="$(echo "$TAGS" | awk '{print $1}')"
+
+          # buildah-build@v2 writes to rootless storage; chunking needs rootful
+          # podman --privileged. Bridge the two storages via oci-archive.
+          buildah push "${IMAGE}:${FIRST_TAG}" "oci-archive:/tmp/${IMAGE}.tar"
+          sudo skopeo copy "oci-archive:/tmp/${IMAGE}.tar" \
+            "containers-storage:localhost/${IMAGE}:${FIRST_TAG}"
+          rm -f "/tmp/${IMAGE}.tar"
+
+          # Pre-chunk hygiene: drop /run and /tmp cruft from the rootfs so it
+          # doesn't end up in a chunk (Bazzite's published pattern).
+          CTR=$(sudo buildah from "localhost/${IMAGE}:${FIRST_TAG}")
+          MNT=$(sudo buildah mount "$CTR")
+          sudo bash -c "rm -rf $MNT/run/.* $MNT/run/* $MNT/tmp/.* $MNT/tmp/* 2>/dev/null || true"
+          sudo buildah umount "$CTR"
+          sudo buildah commit --identity-label=false --rm "$CTR" "localhost/${IMAGE}:${FIRST_TAG}"
+
+          # Chunk: stable RPM-ownership-grouped layers. --max-layers 127 stays
+          # under the OCI 128-layer ceiling. --format-version 2 is the current
+          # bootc-compatible output. Runs inside the image itself — its own
+          # rpm-ostree walks the rootfs.
+          sudo podman run --rm --privileged \
+            --volume /var/lib/containers:/var/lib/containers \
+            "localhost/${IMAGE}:${FIRST_TAG}" \
+            rpm-ostree compose build-chunked-oci \
+              --bootc \
+              --max-layers 127 \
+              --format-version 2 \
+              --from "containers-storage:localhost/${IMAGE}:${FIRST_TAG}" \
+              --output "containers-storage:localhost/${IMAGE}:chunked"
+
+          # Replace every tag the metadata step produced with the chunked
+          # image, in rootful storage.
+          for TAG in $TAGS; do
+            sudo podman tag "localhost/${IMAGE}:chunked" "localhost/${IMAGE}:${TAG}"
+          done
+
+          # Copy the chunked tags back into rootless storage so the existing
+          # push-to-registry@v2 step (which runs rootless buildah) finds them.
+          ROOTLESS_STORAGE="${XDG_DATA_HOME:-$HOME/.local/share}/containers/storage"
+          for TAG in $TAGS; do
+            sudo skopeo copy \
+              "containers-storage:localhost/${IMAGE}:${TAG}" \
+              "containers-storage:[overlay@${ROOTLESS_STORAGE}+${ROOTLESS_STORAGE}]localhost/${IMAGE}:${TAG}"
+          done
+          # Hand ownership back to the runner user — sudo skopeo wrote as root.
+          sudo chown -R "$(id -u):$(id -g)" "${ROOTLESS_STORAGE}"
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
