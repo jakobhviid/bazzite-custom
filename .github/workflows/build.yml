@@ -176,53 +176,92 @@ jobs:
           set -euo pipefail
           IMAGE="${IMAGE_NAME}"
           TAGS="${{ steps.metadata.outputs.tags }}"
-          FIRST_TAG="$(echo "$TAGS" | awk '{print $1}')"
+
+          # Stable internal handoff tags so this script doesn't depend on
+          # which order docker/metadata-action emits its tag list in.
+          INPUT_TAG="rechunk-input"
+          OUTPUT_TAG="rechunk-output"
+          ARCHIVE_IN="/tmp/${IMAGE}-in.tar"
+          ARCHIVE_OUT="/tmp/${IMAGE}-out.tar"
+
+          # Pick *any* metadata tag from the rootless build to ferry across.
+          # All tags reference the same image in rootless storage, so any
+          # works as the source.
+          SOURCE_TAG="$(echo "$TAGS" | awk '{print $1}')"
+          echo "::group::Bridge rootless -> rootful storage (source tag: ${SOURCE_TAG})"
 
           # buildah-build@v2 writes to rootless storage; chunking needs rootful
-          # podman --privileged. Bridge the two storages via oci-archive.
-          buildah push "${IMAGE}:${FIRST_TAG}" "oci-archive:/tmp/${IMAGE}.tar"
-          sudo skopeo copy "oci-archive:/tmp/${IMAGE}.tar" \
-            "containers-storage:localhost/${IMAGE}:${FIRST_TAG}"
-          rm -f "/tmp/${IMAGE}.tar"
+          # podman --privileged. Bridge via oci-archive.
+          buildah push "${IMAGE}:${SOURCE_TAG}" "oci-archive:${ARCHIVE_IN}"
+          sudo skopeo copy "oci-archive:${ARCHIVE_IN}" \
+            "containers-storage:localhost/${IMAGE}:${INPUT_TAG}"
+          rm -f "${ARCHIVE_IN}"
+          echo "::endgroup::"
 
-          # Pre-chunk hygiene: drop /run and /tmp cruft from the rootfs so it
-          # doesn't end up in a chunk (Bazzite's published pattern).
-          CTR=$(sudo buildah from "localhost/${IMAGE}:${FIRST_TAG}")
+          echo "::group::Pre-chunk hygiene (drop /run, /tmp cruft)"
+          # Bazzite's published pattern — keep junk files out of the chunks.
+          CTR=$(sudo buildah from "localhost/${IMAGE}:${INPUT_TAG}")
           MNT=$(sudo buildah mount "$CTR")
           sudo bash -c "rm -rf $MNT/run/.* $MNT/run/* $MNT/tmp/.* $MNT/tmp/* 2>/dev/null || true"
           sudo buildah umount "$CTR"
-          sudo buildah commit --identity-label=false --rm "$CTR" "localhost/${IMAGE}:${FIRST_TAG}"
+          sudo buildah commit --identity-label=false --rm "$CTR" \
+            "localhost/${IMAGE}:${INPUT_TAG}"
+          echo "::endgroup::"
 
-          # Chunk: stable RPM-ownership-grouped layers. --max-layers 127 stays
-          # under the OCI 128-layer ceiling. --format-version 2 is the current
-          # bootc-compatible output. Runs inside the image itself — its own
-          # rpm-ostree walks the rootfs.
+          echo "::group::rpm-ostree compose build-chunked-oci"
+          # --from takes a *bare* image ref (no transport prefix) — rpm-ostree
+          # prepends `containers-storage:` itself. --output takes a
+          # transport-prefixed ref. Matches Bazzite's upstream invocation.
+          # --max-layers 127 stays under the OCI 128-layer ceiling.
           sudo podman run --rm --privileged \
             --volume /var/lib/containers:/var/lib/containers \
-            "localhost/${IMAGE}:${FIRST_TAG}" \
+            "localhost/${IMAGE}:${INPUT_TAG}" \
             rpm-ostree compose build-chunked-oci \
               --bootc \
               --max-layers 127 \
               --format-version 2 \
-              --from "containers-storage:localhost/${IMAGE}:${FIRST_TAG}" \
-              --output "containers-storage:localhost/${IMAGE}:chunked"
+              --from "localhost/${IMAGE}:${INPUT_TAG}" \
+              --output "containers-storage:localhost/${IMAGE}:${OUTPUT_TAG}"
+          echo "::endgroup::"
 
-          # Replace every tag the metadata step produced with the chunked
-          # image, in rootful storage.
+          echo "::group::Verify chunked layer count"
+          LAYERS=$(sudo podman inspect "localhost/${IMAGE}:${OUTPUT_TAG}" \
+            --format '{{len .RootFS.Layers}}')
+          echo "Chunked image has ${LAYERS} layers (was 1-2 before chunking)."
+          if [[ "${LAYERS}" -lt 10 ]]; then
+            echo "::error::Chunked image has only ${LAYERS} layers — chunking likely didn't take effect."
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Bridge rootful -> rootless storage"
+          # oci-archive round-trip (instead of the brittle
+          # containers-storage:[overlay@...+...] syntax) and then buildah tag
+          # to fan out to every tag the metadata step produced.
+          sudo skopeo copy \
+            "containers-storage:localhost/${IMAGE}:${OUTPUT_TAG}" \
+            "oci-archive:${ARCHIVE_OUT}"
+          sudo chown "$(id -u):$(id -g)" "${ARCHIVE_OUT}"
+
+          # Drop the old (non-chunked) tags from rootless storage so the load
+          # below cleanly replaces them.
           for TAG in $TAGS; do
-            sudo podman tag "localhost/${IMAGE}:chunked" "localhost/${IMAGE}:${TAG}"
+            buildah rmi --force "${IMAGE}:${TAG}" 2>/dev/null || true
           done
 
-          # Copy the chunked tags back into rootless storage so the existing
-          # push-to-registry@v2 step (which runs rootless buildah) finds them.
-          ROOTLESS_STORAGE="${XDG_DATA_HOME:-$HOME/.local/share}/containers/storage"
+          # Load chunked image under the first tag, then fan out via buildah tag.
+          PRIMARY_TAG="$(echo "$TAGS" | awk '{print $1}')"
+          skopeo copy "oci-archive:${ARCHIVE_OUT}" \
+            "containers-storage:localhost/${IMAGE}:${PRIMARY_TAG}"
           for TAG in $TAGS; do
-            sudo skopeo copy \
-              "containers-storage:localhost/${IMAGE}:${TAG}" \
-              "containers-storage:[overlay@${ROOTLESS_STORAGE}+${ROOTLESS_STORAGE}]localhost/${IMAGE}:${TAG}"
+            if [[ "$TAG" != "$PRIMARY_TAG" ]]; then
+              buildah tag "${IMAGE}:${PRIMARY_TAG}" "${IMAGE}:${TAG}"
+            fi
           done
-          # Hand ownership back to the runner user — sudo skopeo wrote as root.
-          sudo chown -R "$(id -u):$(id -g)" "${ROOTLESS_STORAGE}"
+          rm -f "${ARCHIVE_OUT}"
+          echo "::endgroup::"
+
+          echo "Rechunk complete. ${LAYERS} layers across $(echo $TAGS | wc -w) tag(s)."
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
