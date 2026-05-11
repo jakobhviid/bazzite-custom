@@ -259,6 +259,19 @@ jobs:
       # and rootless ops on this runner hit `Error during unshare(...):
       # Operation not permitted` from apparmor's user-namespace restriction.
       # Pushing rootful sidesteps that and matches Bazzite's upstream flow.
+      #
+      # Push-once-then-tag-by-digest pattern: the first push converts the
+      # source manifest format (docker v2 in containers-storage -> OCI on
+      # the wire) and produces digest D. If we then `skopeo copy` from the
+      # SAME containers-storage source to each remaining tag, subsequent
+      # pushes silently produce *different* digests because skopeo takes a
+      # slightly different code path when the registry already has the
+      # blobs. The result: :latest signed with one digest, the dated tags
+      # with another, and `cosign verify` fails on the tag whose
+      # signature wasn't taken. Instead, push once for real, then `skopeo
+      # copy docker://reg/img@<digest> docker://reg/img:<tag>` per remaining
+      # tag — a manifest-only re-tag that guarantees all tags resolve to
+      # the same digest D (the one cosign signs).
       - name: Push To GHCR
         if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         id: push
@@ -272,23 +285,29 @@ jobs:
           IMAGE="${IMAGE_NAME}"
           TAGS="${{ steps.metadata.outputs.tags }}"
           SOURCE="containers-storage:localhost/${IMAGE}:rechunk-output"
-          DIGEST=""
 
-          # Push the chunked manifest under each metadata tag. After the
-          # first push the blobs are already on the registry so subsequent
-          # tag-pushes only upload a manifest (cheap).
+          PRIMARY_TAG="$(echo "$TAGS" | awk '{print $1}')"
+          PRIMARY_DEST="docker://${REGISTRY}/${IMAGE}:${PRIMARY_TAG}"
+
+          echo "First push (full upload, format=oci): ${PRIMARY_DEST}"
+          sudo skopeo copy --format=oci --digestfile /tmp/push-digest \
+            --dest-creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
+            "${SOURCE}" "${PRIMARY_DEST}"
+          DIGEST="$(sudo cat /tmp/push-digest)"
+          sudo rm -f /tmp/push-digest
+          echo "  digest: ${DIGEST}"
+
           for TAG in $TAGS; do
-            DEST="docker://${REGISTRY}/${IMAGE}:${TAG}"
-            echo "Pushing ${IMAGE}:${TAG} -> ${DEST}"
-            sudo skopeo copy --digestfile /tmp/push-digest \
+            if [[ "$TAG" == "$PRIMARY_TAG" ]]; then continue; fi
+            echo "Re-tagging by digest: ${TAG}"
+            sudo skopeo copy \
+              --src-creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
               --dest-creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
-              "${SOURCE}" "${DEST}"
-            DIGEST="$(sudo cat /tmp/push-digest)"
-            sudo rm -f /tmp/push-digest
-            echo "  digest: ${DIGEST}"
+              "docker://${REGISTRY}/${IMAGE}@${DIGEST}" \
+              "docker://${REGISTRY}/${IMAGE}:${TAG}"
           done
 
-          # All metadata tags point to the same manifest, so any digest works.
+          # All tags now resolve to ${DIGEST}; cosign step signs that digest.
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
