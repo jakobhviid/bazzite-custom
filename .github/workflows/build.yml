@@ -182,7 +182,6 @@ jobs:
           INPUT_TAG="rechunk-input"
           OUTPUT_TAG="rechunk-output"
           ARCHIVE_IN="/tmp/${IMAGE}-in.tar"
-          ARCHIVE_OUT="/tmp/${IMAGE}-out.tar"
 
           # Pick *any* metadata tag from the rootless build to ferry across.
           # All tags reference the same image in rootless storage, so any
@@ -234,35 +233,19 @@ jobs:
           fi
           echo "::endgroup::"
 
-          echo "::group::Bridge rootful -> rootless storage"
-          # oci-archive round-trip (instead of the brittle
-          # containers-storage:[overlay@...+...] syntax) and then buildah tag
-          # to fan out to every tag the metadata step produced.
-          sudo skopeo copy \
-            "containers-storage:localhost/${IMAGE}:${OUTPUT_TAG}" \
-            "oci-archive:${ARCHIVE_OUT}"
-          sudo chown "$(id -u):$(id -g)" "${ARCHIVE_OUT}"
+          # Chunked image now lives in rootful containers-storage as
+          # localhost/${IMAGE}:${OUTPUT_TAG}. The downstream push step copies
+          # directly from there to GHCR via sudo skopeo (matches Bazzite's
+          # upstream flow). Earlier attempts to bridge the image back into
+          # rootless storage hit `Error during unshare(...): Operation not
+          # permitted` from apparmor restrictions on user namespaces on the
+          # ubuntu-24.04 runner — doing everything rootful sidesteps that.
+          echo "Rechunk complete. ${LAYERS} layers, ready for push."
 
-          # Drop the old (non-chunked) tags from rootless storage so the load
-          # below cleanly replaces them.
-          for TAG in $TAGS; do
-            buildah rmi --force "${IMAGE}:${TAG}" 2>/dev/null || true
-          done
-
-          # Load chunked image under the first tag, then fan out via buildah tag.
-          PRIMARY_TAG="$(echo "$TAGS" | awk '{print $1}')"
-          skopeo copy "oci-archive:${ARCHIVE_OUT}" \
-            "containers-storage:localhost/${IMAGE}:${PRIMARY_TAG}"
-          for TAG in $TAGS; do
-            if [[ "$TAG" != "$PRIMARY_TAG" ]]; then
-              buildah tag "${IMAGE}:${PRIMARY_TAG}" "${IMAGE}:${TAG}"
-            fi
-          done
-          rm -f "${ARCHIVE_OUT}"
-          echo "::endgroup::"
-
-          echo "Rechunk complete. ${LAYERS} layers across $(echo $TAGS | wc -w) tag(s)."
-
+      # docker/login-action writes ~/.docker/config.json for the runner
+      # user. cosign reads that by default, so this is needed even though
+      # the push step below uses inline creds (sudo skopeo can't see the
+      # runner-user docker config easily).
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -271,19 +254,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Direct sudo skopeo push from rootful containers-storage. Replaces
+      # redhat-actions/push-to-registry@v2, which uses rootless buildah —
+      # and rootless ops on this runner hit `Error during unshare(...):
+      # Operation not permitted` from apparmor's user-namespace restriction.
+      # Pushing rootful sidesteps that and matches Bazzite's upstream flow.
       - name: Push To GHCR
-        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2
         if: steps.check_base.outputs.skip != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         id: push
+        shell: bash
         env:
           REGISTRY_USER: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ github.token }}
-        with:
-          registry: ${{ env.IMAGE_REGISTRY }}
-          image: ${{ env.IMAGE_NAME }}
-          tags: ${{ steps.metadata.outputs.tags }}
-          username: ${{ env.REGISTRY_USER }}
-          password: ${{ env.REGISTRY_PASSWORD }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REGISTRY="${IMAGE_REGISTRY}"
+          IMAGE="${IMAGE_NAME}"
+          TAGS="${{ steps.metadata.outputs.tags }}"
+          SOURCE="containers-storage:localhost/${IMAGE}:rechunk-output"
+          DIGEST=""
+
+          # Push the chunked manifest under each metadata tag. After the
+          # first push the blobs are already on the registry so subsequent
+          # tag-pushes only upload a manifest (cheap).
+          for TAG in $TAGS; do
+            DEST="docker://${REGISTRY}/${IMAGE}:${TAG}"
+            echo "Pushing ${IMAGE}:${TAG} -> ${DEST}"
+            sudo skopeo copy --digestfile /tmp/push-digest \
+              --dest-creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
+              "${SOURCE}" "${DEST}"
+            DIGEST="$(sudo cat /tmp/push-digest)"
+            sudo rm -f /tmp/push-digest
+            echo "  digest: ${DIGEST}"
+          done
+
+          # All metadata tags point to the same manifest, so any digest works.
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
