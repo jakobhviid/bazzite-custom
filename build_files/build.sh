@@ -135,6 +135,22 @@ dnf5 install -y \
     unrar 7zip \
     gnome-tweaks
 
+# ─── Remove base image packages we don't want ────────────────────────────────
+# bazzite-gnome ships kmod-openrazer + openrazer-kmod-common for users who
+# want RGB/DPI control via polychromatic. The razeraccessory kernel driver
+# matches every Razer mouse PID and tells usbhid to mark the secondary HID
+# interfaces ("skipping secondary interface" in dmesg) — which are exactly
+# the keyboard endpoints Razer mice use to replay onboard macros. Result:
+# keystrokes configured via Synapse on macOS/Windows (stored in the mouse's
+# onboard memory) silently fail on Linux even though they work natively on
+# the original host with zero software. The mouse firmware is correct; the
+# Linux host driver is hijacking interfaces it shouldn't.
+#
+# Users who actively want polychromatic features can layer the kernel module
+# with `rpm-ostree install kmod-openrazer openrazer-kmod-common` + reboot.
+# Default for everyone else: Razer mice with onboard profiles just work.
+dnf5 remove -y kmod-openrazer openrazer-kmod-common
+
 # ─── Refresh icon cache so newly-installed apps' icons resolve ──────────────
 # Some packages (notably zen-browser) install icons under /usr/share/icons/
 # hicolor/ but don't run gtk-update-icon-cache in their %post scriptlet.
