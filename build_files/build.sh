@@ -133,7 +133,12 @@ dnf5 install -y \
     dejavu-sans-fonts dejavu-serif-fonts dejavu-sans-mono-fonts \
     libheif-tools \
     unrar 7zip \
-    gnome-tweaks
+    gnome-tweaks \
+    gnome-boxes \
+    libvirt-daemon-kvm \
+    virglrenderer \
+    swtpm \
+    edk2-ovmf
 
 # ─── Remove base image packages we don't want ────────────────────────────────
 # bazzite-gnome ships kmod-openrazer + openrazer-kmod-common for users who

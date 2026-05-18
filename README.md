@@ -181,11 +181,27 @@ Critical property (per `man flatpak-preinstall`): *"Users can opt out of preinst
 
 A homegrown "list file + hash marker" approach (which I tried first) does NOT have this property: any list change triggers a full reinstall pass that re-deploys removed apps. Always use the canonical mechanism.
 
-### 8. systemd presets vs explicit enable at build time
+### 8. GNOME Boxes is the deliberate exception — RPM, not Flatpak
+
+Boxes is the only GUI app in the image baked as an RPM despite having a perfectly good Flathub build. Reason: the Flatpak sandbox can't expose `/dev/dri/*` and the virgl pipeline to QEMU cleanly enough for `virtio-vga-gl` to engage. Result with the Flatpak: every guest falls back to `llvmpipe` (software rendering) — single-digit FPS in `glxgears`, modern desktop guests unusable, Windows-with-WDDM guests catastrophic. The RPM has full host GPU access and virgl works as designed.
+
+Five RPMs layered in `build_files/build.sh` for this:
+
+- `gnome-boxes` — the app.
+- `libvirt-daemon-kvm` — Fedora meta-subpackage that pulls `libvirt-daemon`, the qemu/network/storage drivers, and `qemu-kvm-core`. Picks a sane minimal subset without dragging in `qemu-system-aarch64`, full SDL/GTK display backends, etc.
+- `virglrenderer` — host-side virgl renderer. Without this `virtio-vga-gl` can't translate guest GL into host GL.
+- `swtpm` — software TPM, required to install Windows 11 guests (TPM 2.0 attestation gate).
+- `edk2-ovmf` — UEFI firmware blobs for modern guests including Windows 11 secure boot.
+
+**Why session mode and no system-libvirt setup**: Boxes defaults to `qemu:///session` — a per-user libvirt daemon that starts on demand via user-bus socket activation. Zero post-rebase plumbing: no `systemctl enable libvirtd.socket`, no `usermod -aG libvirt`, no per-machine config. If anyone later wants `virt-manager` (system mode, more capable), they layer it via `rpm-ostree install` and do the group setup on the live system — out of scope for this image.
+
+**Flatpak migration note**: removing the `org.gnome.Boxes` entry from `bazzite-custom.preinstall` only stops new installs (per `man flatpak-preinstall`'s additive semantics). Machines that already received the Flatpak keep it after rebase — they'll see two "Boxes" entries in the launcher (Flatpak + RPM), both reading the same VM XMLs from `~/.config/libvirt/`. One-time fix on each affected machine: `flatpak uninstall org.gnome.Boxes`.
+
+### 9. systemd presets vs explicit enable at build time
 
 `/usr/lib/systemd/{system,user}-preset/<priority>-<name>.preset` files declare default-enable for shipped units. **For user units**, presets are evaluated automatically on user login — no build-time work needed. **For system units**, presets are NOT auto-applied during a container build, so you also need an explicit `systemctl enable <name>.service` in `build.sh` to lock the enable in. Without that, the unit ships but never starts.
 
-### 9. bootc lint — handling upstream packaging quirks via sysusers.d/tmpfiles.d
+### 10. bootc lint — handling upstream packaging quirks via sysusers.d/tmpfiles.d
 
 Bazzite's bootc lint pass surfaces three classes of warning that typically come from upstream RPMs not following bootc-friendly conventions:
 
