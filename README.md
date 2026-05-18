@@ -9,7 +9,7 @@ Two image variants built in parallel from one Containerfile via a GHA matrix:
 | `ghcr.io/jakobhviid/bazzite-custom:latest` | `ghcr.io/ublue-os/bazzite-gnome:stable` | X1 Carbon Gen 13 (Intel only) |
 | `ghcr.io/jakobhviid/bazzite-nvidia-custom:latest` | `ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable` | NVIDIA RTX 20-series and newer (Turing+, including RTX 30/40/50) |
 
-Both signed with cosign. The build runs on every push to `main` and polls upstream Bazzite every 3 hours — it only rebuilds when the upstream `:stable` digest has actually changed (see [Build pipeline](#build-pipeline) below for the digest-gated polling mechanism).
+Both signed with cosign. The build runs daily at 10:00 UTC (12:00 CEST) and on every push to `main`. The daily build is unconditional — it always pulls the current Bazzite base AND refreshes layered RPMs (browsers, COPRs) against their upstream repos. See [Build pipeline](#build-pipeline) for details.
 
 ## Rebase a machine
 
@@ -242,10 +242,10 @@ gh api -X PATCH /user/packages/container/bazzite-nvidia-custom -f visibility=pub
 `.github/workflows/build.yml`:
 
 - **Matrix**: `bazzite-gnome` + `bazzite-gnome-nvidia-open` → `bazzite-custom` + `bazzite-nvidia-custom`. Both legs run in parallel.
-- **Triggers**: push to `main` (excluding README), polling cron `30 */3 * * *` (every 3 hours), manual `workflow_dispatch`, plus `pull_request` (build-only, no push/sign).
-- **Digest-gated polling**: the first step (`Check if base image changed`) compares the upstream Bazzite `:stable` digest to a `phd.hviid.bazzite-custom.base-digest` label stored on our last published image. On scheduled runs where the digests match, every subsequent step is skipped via `if:`. Effective behavior: the cron is a "poll for upstream change" check that exits in <30s when nothing has changed; the actual build only fires when Bazzite has published. Pushes and `workflow_dispatch` always build (you want to test your own changes immediately, regardless of upstream state).
-- **Pickup latency**: at most 3 hours between Bazzite publishing a new `:stable` and our images being rebuilt from it.
-- **Runtime when build actually fires**: ~5–7 min per leg with warm cache.
+- **Triggers**: daily cron `0 10 * * *` (10:00 UTC / 12:00 CEST), push to `main` (excluding README), manual `workflow_dispatch`, plus `pull_request` (build-only, no push/sign).
+- **Unconditional daily rebuild**: no digest-gating. Every daily run pulls the current Bazzite base AND re-runs `dnf5 install` against upstream repos, so layered RPMs (Brave, Vivaldi, Claude Desktop, Zen, COPRs) stay ≤24h behind their own upstream. On quiet days where nothing actually changed, the rechunked OCI layers hash identically and GHCR dedupes them — only a new manifest is pushed (a few KB). Decouples our cadence from Bazzite's irregular manual stable promotions.
+- **Why 10:00 UTC**: Bazzite's `:stable` is set manually via their `retag.yml` workflow at irregular intervals (~every 2-4 days on average). Empirically most stable promotions land 03:00-09:00 UTC; running at 10:00 catches that morning window.
+- **Runtime**: ~5–7 min per leg with warm cache.
 - **Concurrency**: per-variant cancel-in-progress (job-level, since matrix isn't visible at workflow-level concurrency).
 - **GHA secrets required**: `SIGNING_SECRET` (cosign private key), `COSIGN_PASSWORD` (passphrase).
 - **Cosign signs by digest**, not by tag — `cosign sign --key env://COSIGN_PRIVATE_KEY "${IMAGE}@${DIGEST}"` against the manifest digest from `steps.push.outputs.digest`. Binds the signature to the immutable manifest, silences the "uses a tag, not a digest" warning, and is one call instead of three (we previously looped over each tag).
