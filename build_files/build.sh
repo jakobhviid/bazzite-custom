@@ -82,6 +82,26 @@ gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-vivaldi
 EOF
 
+# Cider (Apple Music client, Cider Collective) — official RPM repo + key.
+# Pleasantly well-behaved compared to the other third-party desktop apps:
+# installs to /usr/{bin,lib,share} (no /opt), ships zero scriptlets — so it
+# would also layer cleanly via rpm-ostree. Baked anyway for the same reason
+# as the browsers: one optimized image, daily-refreshed, no per-machine layer.
+# repo_gpgcheck=0 to dodge the dnf5 race documented in README gotcha #4;
+# package-level gpgcheck=1 still verifies each RPM against the imported key.
+curl -fsSLo /etc/pki/rpm-gpg/RPM-GPG-KEY-cider \
+  https://repo.cider.sh/RPM-GPG-KEY
+chmod 0644 /etc/pki/rpm-gpg/RPM-GPG-KEY-cider
+cat > /etc/yum.repos.d/cider.repo <<'EOF'
+[cidercollective]
+name=Cider Collective Repository
+baseurl=https://repo.cider.sh/rpm/RPMS
+enabled=1
+gpgcheck=1
+repo_gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cider
+EOF
+
 # Zen Browser — Fedora COPR (the dnf5 copr plugin handles its own key + repo file)
 dnf5 -y copr enable sneexy/zen-browser
 
@@ -118,6 +138,7 @@ dnf5 install -y \
     vivaldi-stable \
     claude-desktop \
     zen-browser \
+    Cider \
     podman-compose \
     gnome-shell-extension-dash-to-panel \
     gnome-shell-extension-dash-to-dock \
