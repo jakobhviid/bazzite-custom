@@ -109,6 +109,12 @@ dnf5 -y copr enable sneexy/zen-browser
 dnf5 -y copr enable atim/starship
 dnf5 -y copr enable atim/lazygit
 
+# Ghostty — not in Fedora main as of F44. Ghostty's official install docs
+# (ghostty.org/docs/install/binary) point at scottames/ghostty as the canonical
+# COPR; pgdev/ghostty exists but has no F44 build. The COPR ships gtk4-layer-shell
+# as a sibling package and dnf5 resolves it from the same repo automatically.
+dnf5 -y copr enable scottames/ghostty
+
 # Firefox needs a matching openh264 — Bazzite ships -1 but mozilla-openh264 wants -2.
 # Enabling fedora-cisco-openh264 surfaces the -2 build.
 dnf5 -y config-manager setopt fedora-cisco-openh264.enabled=1
@@ -146,6 +152,7 @@ dnf5 install -y \
     zsh-autosuggestions zsh-syntax-highlighting \
     bat btop butane eza fzf htop jq just tmux zoxide \
     starship lazygit \
+    ghostty \
     nerd-fonts \
     rsms-inter-fonts \
     jetbrains-mono-fonts \

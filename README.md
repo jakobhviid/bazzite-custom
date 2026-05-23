@@ -80,7 +80,7 @@ There is no first-party install ISO for this image. To flatten a machine: instal
 
 **RPMs from Fedora F44 main:** firefox, firefox-langpacks, brave-browser, vivaldi-stable, claude-desktop, zen-browser, podman-compose, gnome-shell-extension-{dash-to-panel,dash-to-dock}, zsh, bat, btop, butane, eza, fzf, htop, jq, just, tmux, zoxide, zsh-autosuggestions, zsh-syntax-highlighting, libheif-tools, unrar, 7zip, gnome-tweaks, nerd-fonts, rsms-inter-fonts, jetbrains-mono-fonts, cascadia-code-{,nf-}fonts, google-roboto-{,mono-}fonts, dejavu-{sans,serif,sans-mono}-fonts.
 
-**RPMs from custom repos:** brave (brave-browser-rpm-release.s3), vivaldi (repo.vivaldi.com), claude-desktop (aaddrick.github.io community repo), zen-browser (Fedora COPR `sneexy/zen-browser`), starship + lazygit (`atim/starship`, `atim/lazygit` COPRs), Cider (repo.cider.sh, Cider Collective).
+**RPMs from custom repos:** brave (brave-browser-rpm-release.s3), vivaldi (repo.vivaldi.com), claude-desktop (aaddrick.github.io community repo), zen-browser (Fedora COPR `sneexy/zen-browser`), starship + lazygit (`atim/starship`, `atim/lazygit` COPRs), ghostty (`scottames/ghostty` COPR — recommended by Ghostty's own install docs; ships `gtk4-layer-shell` as a sibling dep from the same repo), Cider (repo.cider.sh, Cider Collective).
 
 **System config files:**
 - `/etc/brave/policies/managed/brave-policy.json` — full Brave hardening + Qwant default search. **Fetched at image build time from [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts/blob/main/Linux/assets/brave-policy.json)** — that's the canonical editable source. To change the policy: edit `Linux/assets/brave-policy.json` in ReinstallScripts → push → next image build picks it up automatically.
