@@ -168,6 +168,71 @@ dnf5 install -y \
     swtpm \
     edk2-ovmf
 
+# ─── Proton suite (Mail+Calendar, Pass, Bridge, Meet, Authenticator) ─────────
+# Proton publishes no yum repo for any of these — the only official Linux
+# path is direct .rpm download from proton.me. (Only Proton VPN gets a real
+# Proton-operated yum repo at repo.protonvpn.com, and VPN is excluded from
+# this image for unrelated scriptlet reasons — see the "Proton VPN" note
+# higher up.) We resolve the latest-stable URL via each app's version.json
+# at build time, so each daily image captures whatever was current that day
+# — same update model as the rest of this image (rebuild = update).
+#
+# What's covered:
+#   - Mail (also provides Calendar — same Electron app, no separate Linux pkg)
+#   - Pass
+#   - Bridge (IMAP/SMTP local proxy for native mail clients; user-launched,
+#     no system service)
+#   - Meet
+#   - Authenticator (TOTP/2FA; Tauri/native, ~37 MB — much smaller than the
+#     Electron apps which are ~300-380 MB each)
+#
+# Not covered (no official Linux client as of 2026-05): Drive (planned via
+# Proton's new SDK during 2026 — web/Rclone in the meantime), Docs, Wallet.
+#
+# Verified 2026-05-31 against the live downloads: all five RPMs have *empty*
+# scriptlets (rpm -qp --scripts == nothing) and install only into /usr — no
+# %posttrans calling systemctl (the trap that keeps proton-vpn out of this
+# image), no /opt symlink dance like Brave/Vivaldi/Claude need.
+#
+# Trust boundary: HTTPS to proton.me. Mail/Pass/Meet/Authenticator ship
+# unsigned (--nogpgcheck required); Bridge is signed by Proton key
+# e2c75d68e6234b07 but we don't enable verification for it specifically —
+# parity with the others and with Claude Desktop's repo (which sets
+# repo_gpgcheck=0).
+#
+# Separate transaction from the main dnf5 install above on purpose:
+# --nogpgcheck here must not taint signature verification for the
+# repo-managed packages (Brave, Vivaldi, Cider, Claude Desktop, Fedora).
+#
+# version.json URL conventions are inconsistent across the suite — three
+# shapes in play:
+#   - `<app>/linux/version.json` with .Releases[]   (Mail, Meet, Authenticator)
+#   - `PassDesktop/linux/x64/version.json`         (Pass — historical oddball)
+#   - `bridge/version_linux.json` with .stable     (Bridge — different schema)
+#
+# Filename quirk: Mail's RPM is literally named "ProtonMail-desktop-beta.rpm"
+# on the stable channel — Proton's delivery convention, the package metadata
+# is `proton-mail-X.Y.Z-1` stable. Meet has the same convention internally
+# (path `/usr/lib/proton-meet/Proton Meet Beta`) but its filename is just
+# `ProtonMeet-desktop.rpm`.
+mkdir -p /tmp/proton-rpms
+MAIL_URL=$(curl -fsSL https://proton.me/download/mail/linux/version.json \
+    | jq -r '.Releases[] | select(.CategoryName=="Stable") | .File[] | select(.Url|endswith(".rpm")) | .Url' | head -1)
+PASS_URL=$(curl -fsSL https://proton.me/download/PassDesktop/linux/x64/version.json \
+    | jq -r '.Releases[] | select(.CategoryName=="Stable") | .File[] | select(.Url|endswith(".rpm")) | .Url' | head -1)
+BRIDGE_URL=$(curl -fsSL https://proton.me/download/bridge/version_linux.json \
+    | jq -r '.stable.Installers[]' | grep '\.rpm$' | head -1)
+MEET_URL=$(curl -fsSL https://proton.me/download/meet/linux/version.json \
+    | jq -r '.Releases[] | select(.CategoryName=="Stable") | .File[] | select(.Url|endswith(".rpm")) | .Url' | head -1)
+AUTH_URL=$(curl -fsSL https://proton.me/download/authenticator/linux/version.json \
+    | jq -r '.Releases[] | select(.CategoryName=="Stable") | .File[] | select(.Url|endswith(".rpm")) | .Url' | head -1)
+for url in "$MAIL_URL" "$PASS_URL" "$BRIDGE_URL" "$MEET_URL" "$AUTH_URL"; do
+    [[ -n "$url" ]] || { echo "ERROR: failed to resolve a Proton RPM URL" >&2; exit 1; }
+    curl -fsSL -o "/tmp/proton-rpms/$(basename "$url")" "$url"
+done
+dnf5 install -y --nogpgcheck /tmp/proton-rpms/*.rpm
+rm -rf /tmp/proton-rpms
+
 # ─── Remove base image packages we don't want ────────────────────────────────
 # bazzite-gnome ships kmod-openrazer + openrazer-kmod-common for users who
 # want RGB/DPI control via polychromatic. The razeraccessory kernel driver
