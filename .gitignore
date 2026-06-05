@@ -1,6 +1,0 @@
-cosign.key
-_build_*
-output
-_build-*/**
-.DS_Store
-**/.DS_Store
