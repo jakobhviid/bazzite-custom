@@ -173,9 +173,14 @@ dnf5 install -y \
 # path is direct .rpm download from proton.me. (Only Proton VPN gets a real
 # Proton-operated yum repo at repo.protonvpn.com, and VPN is excluded from
 # this image for unrelated scriptlet reasons — see the "Proton VPN" note
-# higher up.) We resolve the latest-stable URL via each app's version.json
-# at build time, so each daily image captures whatever was current that day
+# higher up.) We resolve the latest URL via each app's version.json at
+# build time, so each daily image captures whatever was current that day
 # — same update model as the rest of this image (rebuild = update).
+#
+# Channel selection: Stable for everything *except* Mail, which tracks
+# EarlyAccess. As of 2026-06-05 the EarlyAccess channel is two minor
+# versions ahead of Stable (1.13.x vs 1.12.1) and carries fixes that
+# don't otherwise reach the image until they roll through to Stable.
 #
 # What's covered:
 #   - Mail (also provides Calendar — same Electron app, no separate Linux pkg)
@@ -211,13 +216,13 @@ dnf5 install -y \
 #   - `bridge/version_linux.json` with .stable     (Bridge — different schema)
 #
 # Filename quirk: Mail's RPM is literally named "ProtonMail-desktop-beta.rpm"
-# on the stable channel — Proton's delivery convention, the package metadata
-# is `proton-mail-X.Y.Z-1` stable. Meet has the same convention internally
-# (path `/usr/lib/proton-meet/Proton Meet Beta`) but its filename is just
-# `ProtonMeet-desktop.rpm`.
+# on every channel (Stable, EarlyAccess, Alpha) — Proton's delivery convention,
+# the package metadata is `proton-mail-X.Y.Z-1` regardless. Meet has the same
+# convention internally (path `/usr/lib/proton-meet/Proton Meet Beta`) but its
+# filename is just `ProtonMeet-desktop.rpm`.
 mkdir -p /tmp/proton-rpms
 MAIL_URL=$(curl -fsSL https://proton.me/download/mail/linux/version.json \
-    | jq -r '.Releases[] | select(.CategoryName=="Stable") | .File[] | select(.Url|endswith(".rpm")) | .Url' | head -1)
+    | jq -r '.Releases[] | select(.CategoryName=="EarlyAccess") | .File[] | select(.Url|endswith(".rpm")) | .Url' | head -1)
 PASS_URL=$(curl -fsSL https://proton.me/download/PassDesktop/linux/x64/version.json \
     | jq -r '.Releases[] | select(.CategoryName=="Stable") | .File[] | select(.Url|endswith(".rpm")) | .Url' | head -1)
 BRIDGE_URL=$(curl -fsSL https://proton.me/download/bridge/version_linux.json \
