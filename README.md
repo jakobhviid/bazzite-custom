@@ -82,23 +82,23 @@ There is no first-party install ISO for this image. To flatten a machine: instal
 
 ## What's baked in
 
-**RPMs from Fedora F44 main:** firefox, firefox-langpacks, brave-browser, vivaldi-stable, claude-desktop, zen-browser, podman-compose, gnome-shell-extension-{dash-to-panel,dash-to-dock}, zsh, bat, btop, butane, eza, fzf, htop, jq, just, tmux, zoxide, zsh-autosuggestions, zsh-syntax-highlighting, libheif-tools, unrar, 7zip, gnome-tweaks, nerd-fonts, rsms-inter-fonts, jetbrains-mono-fonts, cascadia-code-{,nf-}fonts, google-roboto-{,mono-}fonts, dejavu-{sans,serif,sans-mono}-fonts.
+**RPMs from Fedora F44 main:** firefox, firefox-langpacks, vivaldi-stable, claude-desktop, zen-browser, podman-compose, gnome-shell-extension-{dash-to-panel,dash-to-dock}, zsh, bat, btop, butane, eza, fzf, htop, jq, just, tmux, zoxide, zsh-autosuggestions, zsh-syntax-highlighting, libheif-tools, unrar, 7zip, gnome-tweaks, nerd-fonts, rsms-inter-fonts, jetbrains-mono-fonts, cascadia-code-{,nf-}fonts, google-roboto-{,mono-}fonts, dejavu-{sans,serif,sans-mono}-fonts.
 
-**RPMs from custom repos:** brave (brave-browser-rpm-release.s3), vivaldi (repo.vivaldi.com), claude-desktop (aaddrick.github.io community repo), zen-browser (Fedora COPR `sneexy/zen-browser`), starship + lazygit (`atim/starship`, `atim/lazygit` COPRs), ghostty (`scottames/ghostty` COPR — recommended by Ghostty's own install docs; ships `gtk4-layer-shell` as a sibling dep from the same repo), Cider (repo.cider.sh, Cider Collective).
+**RPMs from custom repos:** brave-origin (`brave-browser-rpm-release.s3` — same Brave repo as standard Brave, different package), vivaldi (repo.vivaldi.com), claude-desktop (aaddrick.github.io community repo), zen-browser (Fedora COPR `sneexy/zen-browser`), starship + lazygit (`atim/starship`, `atim/lazygit` COPRs), ghostty (`scottames/ghostty` COPR — recommended by Ghostty's own install docs; ships `gtk4-layer-shell` as a sibling dep from the same repo), Cider (repo.cider.sh, Cider Collective).
 
 **Proton suite (Mail, Pass, Bridge, Meet, Authenticator):** fetched as direct `.rpm` downloads from `proton.me` at image build time (Proton publishes no yum repo for these). Mail tracks Proton's EarlyAccess channel; the rest track Stable. Proton VPN is intentionally excluded — see "What's NOT in the image" below.
 
 **System config files:**
 
-- `/etc/brave/policies/managed/brave-policy.json` — full Brave hardening + Qwant default search. Maintained in the build's source repo; a copy also lives in [ReinstallScripts](https://github.com/jakobhviid/ReinstallScripts/blob/main/Linux/assets/brave-policy.json) for use on stock Bazzite via `install-bazzite.sh`.
-- `/etc/xdg/mimeapps.list` — Brave as system default browser (per-user override still wins).
+- `/etc/brave/policies/managed/brave-policy.json` — Brave Origin hardening + Qwant default search. Trimmed for Origin (drops keys whose features are compiled out of the Origin binary: Wallet/Rewards/Leo/Tor/News/Talk/VPN/Playlist/Speedreader/Wayback/P3A/Web Discovery/Stats Ping/IPFS). Mirrored at [ReinstallScripts/Linux/assets/brave-origin-policy.json](https://github.com/jakobhviid/ReinstallScripts/blob/main/Linux/assets/brave-origin-policy.json) where `just drift` keeps the two in sync.
+- `/etc/xdg/mimeapps.list` — Brave Origin as system default browser (per-user override still wins).
 - `/etc/pki/containers/bazzite-custom.pub` — cosign public key for client-side update verification.
 - `/usr/share/wireplumber/wireplumber.conf.d/rename-devices.conf` — friendly names for Sonos Ace + Sennheiser BTD 700 (no-op when those devices aren't connected). Same dual-home setup as the Brave policy: source-of-truth in the build repo, copy in ReinstallScripts for stock-Bazzite use.
 
 **System services baked in:**
 
 - `/usr/lib/systemd/system/bazzite-custom-flatpaks.service` — runs `flatpak preinstall -y --noninteractive` on boot, applies the file at `/usr/share/flatpak/preinstall.d/bazzite-custom.preinstall` (33 Flathub apps). Auto-enabled via `/usr/lib/systemd/system-preset/90-bazzite-custom.preset`.
-- `/usr/lib/systemd/user/{brave,vivaldi,nextcloud}-unlock.service` — drops stale singleton-lock files at user login so the apps don't refuse to launch after crashes. Auto-enabled per-user via `/usr/lib/systemd/user-preset/90-bazzite-custom.preset`.
+- `/usr/lib/systemd/user/{brave-origin,vivaldi,nextcloud}-unlock.service` — drops stale singleton-lock files at user login so the apps don't refuse to launch after crashes. Auto-enabled per-user via `/usr/lib/systemd/user-preset/90-bazzite-custom.preset`.
 
 ---
 
