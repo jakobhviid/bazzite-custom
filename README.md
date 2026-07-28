@@ -98,7 +98,10 @@ There is no first-party install ISO for this image. To flatten a machine: instal
 **System services baked in:**
 
 - `/usr/lib/systemd/system/bazzite-custom-flatpaks.service` — runs `flatpak preinstall -y --noninteractive` on boot, applies the file at `/usr/share/flatpak/preinstall.d/bazzite-custom.preinstall` (33 Flathub apps). Auto-enabled via `/usr/lib/systemd/system-preset/90-bazzite-custom.preset`.
-- `/usr/lib/systemd/user/{brave-origin,vivaldi,nextcloud}-unlock.service` — drops stale singleton-lock files at user login so the apps don't refuse to launch after crashes. Auto-enabled per-user via `/usr/lib/systemd/user-preset/90-bazzite-custom.preset`.
+- `/usr/lib/systemd/user/{brave-origin,vivaldi,nextcloud}-unlock.service` — drops stale singleton-lock files at user login so the apps don't refuse to launch after crashes.
+- `/usr/lib/systemd/user/bazzite-custom-brew.service` — first-login oneshot that `brew trust`s + taps `jakobhviid/tap`, then installs **and upgrades** `temper` into the shared `/home/linuxbrew` prefix (so it's runnable by every user). `install` no-ops on an already-present temper, so the trailing `upgrade` refreshes a stale one to latest at first login (a no-op when current; ongoing upgrades are handled by ublue's daily `brew-upgrade.timer`). Brew can't run at image-build time (no prefix, and it refuses root), so this fires once ublue's `brew-setup.service` has extracted Homebrew; a per-user `~/.local/state/bazzite-custom/brew-bootstrap.done` stamp (written only on success) stops it re-hitting the network on later logins and lets an offline first login retry. This is independent of the `Brewfile.<machine>` userspace tier — even a machine that never runs ReinstallScripts gets `temper`.
+
+  All four user units are enabled at **build time** via `systemctl --global enable` (which bakes the `/etc/systemd/user/default.target.wants/` symlinks), not left to the user-preset alone — on an atomic upgrade nothing re-applies presets on the client, so a preset-only unit would ship un-enabled and never run. They're also listed in `/usr/lib/systemd/user-preset/90-bazzite-custom.preset` as the declarative record. A user can opt out per-user with `systemctl --user disable <unit>`.
 
 ---
 
