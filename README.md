@@ -1,4 +1,4 @@
-# bazzite-custom
+# bazzite-custom - NO LONGER ACTIVE; DO NOT USE!
 
 A small ublue/Bazzite derivative for Jakob's three-machine GNOME fleet. Two image variants built in parallel from one Containerfile:
 
